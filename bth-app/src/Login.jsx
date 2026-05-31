@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { supabase } from './supabase'
 
 export default function Login() {
-  const [mode, setMode] = useState('signin') // 'signin' | 'signup'
+  const [mode, setMode] = useState('signin')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -14,18 +14,17 @@ export default function Login() {
     setError('')
     setMessage('')
     setLoading(true)
+
     if (mode === 'signup') {
       if (!name.trim()) { setError('Enter your name.'); setLoading(false); return }
-      const { error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: { data: { name: name.trim() } },
-      })
-      if (error) setError(error.message)
-      else setMessage('Check your email to confirm your account, then sign in.')
+      const { data, error: signUpError } = await supabase.auth.signUp({ email, password })
+      if (signUpError) { setError(signUpError.message); setLoading(false); return }
+      if (data?.user) {
+        await supabase.from('agents').upsert({ id: data.user.id, email, name: name.trim() })
+      }
     } else {
-      const { error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) setError(error.message)
+      const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+      if (signInError) setError(signInError.message)
     }
     setLoading(false)
   }
@@ -72,7 +71,7 @@ const s = {
   card: { width: 360, background: '#fff', border: '1px solid #d8d2c8', borderRadius: 6, padding: '36px 32px' },
   brand: { fontSize: 11, letterSpacing: '0.2em', color: '#5a7a4a', fontWeight: 'bold', marginBottom: 4, textAlign: 'center' },
   sub: { fontSize: 12, color: '#a09a8e', textAlign: 'center', marginBottom: 28 },
-  toggleRow: { display: 'flex', gap: 0, marginBottom: 24, border: '1px solid #d8d2c8', borderRadius: 4, overflow: 'hidden' },
+  toggleRow: { display: 'flex', marginBottom: 24, border: '1px solid #d8d2c8', borderRadius: 4, overflow: 'hidden' },
   toggle: { flex: 1, padding: '8px', border: 'none', background: 'transparent', fontSize: 13, cursor: 'pointer', fontFamily: 'Georgia, serif', color: '#8a8480' },
   toggleActive: { background: '#5a7a4a', color: '#fff' },
   field: { marginBottom: 16 },
