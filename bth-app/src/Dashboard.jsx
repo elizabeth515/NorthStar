@@ -552,36 +552,53 @@ function useVoiceField(onResult) {
 function VoiceInterview({ questions, onComplete, onClose }) {
   const [idx, setIdx] = useState(0)
   const [answers, setAnswers] = useState(questions.map(() => ''))
+  const answersRef = useRef(questions.map(() => ''))
+  const idxRef = useRef(0)
   const [phase, setPhase] = useState('ready') // ready | listening | done
   const { start, stop, listening, transcript } = useVoiceField()
 
   const current = questions[idx]
 
+  const advance = (updatedAnswers) => {
+    const nextIdx = idxRef.current + 1
+    if (nextIdx < questions.length) {
+      setTimeout(() => {
+        idxRef.current = nextIdx
+        setIdx(nextIdx)
+        setPhase('ready')
+      }, 400)
+    } else {
+      setPhase('done')
+      onComplete(updatedAnswers)
+    }
+  }
+
   const startListening = () => {
     setPhase('listening')
     start((answer) => {
-      const updated = [...answers]
-      updated[idx] = answer
-      setAnswers(updated)
-      if (idx < questions.length - 1) {
-        setTimeout(() => {
-          setIdx(i => i + 1)
-          setPhase('ready')
-        }, 400)
-      } else {
-        setPhase('done')
-        onComplete(updated)
-      }
+      const updated = [...answersRef.current]
+      updated[idxRef.current] = answer
+      answersRef.current = updated
+      setAnswers([...updated])
+      advance(updated)
     })
   }
 
   const skip = () => {
     stop()
-    if (idx < questions.length - 1) { setIdx(i => i + 1); setPhase('ready') }
-    else { setPhase('done'); onComplete(answers) }
+    const updated = [...answersRef.current]
+    const nextIdx = idxRef.current + 1
+    if (nextIdx < questions.length) {
+      idxRef.current = nextIdx
+      setIdx(nextIdx)
+      setPhase('ready')
+    } else {
+      setPhase('done')
+      onComplete(updated)
+    }
   }
 
-  const restart = (i) => { stop(); setIdx(i); setPhase('ready') }
+  const restart = (i) => { stop(); idxRef.current = i; setIdx(i); setPhase('ready') }
 
   if (phase === 'done') {
     return (
@@ -640,18 +657,20 @@ function VoiceInterview({ questions, onComplete, onClose }) {
             </button>
           )}
           {phase === 'listening' && (
-            <button style={vs.micBtnActive} onClick={skip}>
+            <button style={vs.micBtnActive} onClick={() => { stop(); advance(answersRef.current) }}>
               <span style={vs.micIcon}>⏹</span>
-              <span>Stop (or wait 5 sec)</span>
+              <span>Done speaking</span>
             </button>
           )}
-          <button style={vs.skipBtn} onClick={skip}>
-            {idx < questions.length - 1 ? 'Skip →' : 'Finish'}
-          </button>
+          {phase === 'ready' && (
+            <button style={vs.skipBtn} onClick={skip}>
+              {idx < questions.length - 1 ? 'Skip question' : 'End interview'}
+            </button>
+          )}
         </div>
 
         <div style={vs.hint}>
-          {phase === 'listening' ? 'Speaking… pause 5 seconds to move on.' : 'Tap the mic and speak your answer naturally.'}
+          {phase === 'listening' ? 'Speaking… pause 5 seconds to move on automatically.' : 'Tap the mic and speak your answer naturally.'}
         </div>
       </div>
     </div>
