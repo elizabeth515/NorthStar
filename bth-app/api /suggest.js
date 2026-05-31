@@ -1,4 +1,9 @@
 export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*')
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+
+  if (req.method === 'OPTIONS') return res.status(200).end()
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   const { northStar, showing } = req.body
@@ -20,7 +25,7 @@ Showing observations:
 - What became less true: ${showing.lessTrue || 'not noted'}
 - Agent note: ${showing.hypothesisUpdate || 'none'}
 
-Based on these observations, suggest refined values for each hypothesis field. Only change a field when the evidence clearly supports a refinement. Keep each value under 12 words. If a field should stay the same, return its current value unchanged. If a field was empty and evidence now supports filling it, fill it.
+Suggest refined values for each hypothesis field. Only change a field when the evidence clearly supports it. Keep each value under 12 words. If a field should stay the same, return its current value. If empty and evidence supports filling it, fill it.
 
 Respond ONLY with a valid JSON object with exactly these keys: propertyType, location, motivation, whatMattersMost, willingToTrade, tradeFor. No explanation, no markdown, just the JSON.`
 
@@ -38,7 +43,6 @@ Respond ONLY with a valid JSON object with exactly these keys: propertyType, loc
         messages: [{ role: 'user', content: prompt }],
       }),
     })
-
     const data = await response.json()
     const text = data.content?.[0]?.text || '{}'
     const suggestions = JSON.parse(text.replace(/```json|```/g, '').trim())
