@@ -11,17 +11,12 @@ export default function Login() {
   const [message, setMessage] = useState('')
 
   const handleSubmit = async () => {
-    setError('')
-    setMessage('')
-    setLoading(true)
-
+    setError(''); setMessage(''); setLoading(true)
     if (mode === 'signup') {
       if (!name.trim()) { setError('Enter your name.'); setLoading(false); return }
       const { data, error: signUpError } = await supabase.auth.signUp({ email, password })
       if (signUpError) { setError(signUpError.message); setLoading(false); return }
-      if (data?.user) {
-        await supabase.from('agents').upsert({ id: data.user.id, email, name: name.trim() })
-      }
+      if (data?.user) await supabase.from('agents').upsert({ id: data.user.id, email, name: name.trim() })
     } else {
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
       if (signInError) setError(signInError.message)
@@ -32,8 +27,8 @@ export default function Login() {
   return (
     <div style={s.shell}>
       <div style={s.card}>
-        <div style={s.brand}>BUILD THE HOUSE</div>
-        <div style={s.sub}>Buyer Framework</div>
+        <div style={s.brandMark}>BUILD THE HOUSE</div>
+        <div style={s.brandSub}>Buyer Framework</div>
 
         <div style={s.toggleRow}>
           <button style={{ ...s.toggle, ...(mode === 'signin' ? s.toggleActive : {}) }} onClick={() => { setMode('signin'); setError(''); setMessage('') }}>Sign in</button>
@@ -67,17 +62,18 @@ export default function Login() {
 }
 
 const s = {
-  shell: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#f5f2ee' },
-  card: { width: 360, background: '#fff', border: '1px solid #d8d2c8', borderRadius: 6, padding: '36px 32px' },
-  brand: { fontSize: 11, letterSpacing: '0.2em', color: '#5a7a4a', fontWeight: 'bold', marginBottom: 4, textAlign: 'center' },
-  sub: { fontSize: 12, color: '#a09a8e', textAlign: 'center', marginBottom: 28 },
-  toggleRow: { display: 'flex', marginBottom: 24, border: '1px solid #d8d2c8', borderRadius: 4, overflow: 'hidden' },
-  toggle: { flex: 1, padding: '8px', border: 'none', background: 'transparent', fontSize: 13, cursor: 'pointer', fontFamily: 'Georgia, serif', color: '#8a8480' },
-  toggleActive: { background: '#5a7a4a', color: '#fff' },
-  field: { marginBottom: 16 },
-  label: { display: 'block', fontSize: 11, letterSpacing: '0.08em', color: '#7a7570', textTransform: 'uppercase', marginBottom: 5 },
-  input: { width: '100%', padding: '9px 12px', border: '1px solid #d8d2c8', borderRadius: 4, fontSize: 14, fontFamily: 'Georgia, serif', outline: 'none', color: '#2a2521' },
-  error: { fontSize: 12, color: '#a05040', marginBottom: 14, padding: '8px 10px', background: '#fdf0ee', borderRadius: 3 },
-  success: { fontSize: 12, color: '#3a6a2a', marginBottom: 14, padding: '8px 10px', background: '#f0f7ec', borderRadius: 3 },
-  btn: { width: '100%', padding: '11px', background: '#5a7a4a', color: '#fff', border: 'none', borderRadius: 4, fontSize: 14, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  shell: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0f1729', fontFamily: "Georgia, 'Times New Roman', serif" },
+  card: { width: 360, background: '#fff', borderRadius: 10, padding: '40px 36px', boxShadow: '0 8px 40px rgba(0,0,0,0.3)' },
+  brandMark: { fontSize: 10, letterSpacing: '0.22em', color: '#c9a84c', fontWeight: 'bold', marginBottom: 4, textAlign: 'center' },
+  brandSub: { fontSize: 12, color: '#9ca3af', textAlign: 'center', marginBottom: 32 },
+  toggleRow: { display: 'flex', marginBottom: 24, border: '1px solid #e8e0d4', borderRadius: 6, overflow: 'hidden' },
+  toggle: { flex: 1, padding: '9px', border: 'none', background: 'transparent', fontSize: 13, cursor: 'pointer', fontFamily: 'Georgia, serif', color: '#9ca3af' },
+  toggleActive: { background: '#0f1729', color: '#c9a84c', fontWeight: 'bold' },
+  field: { marginBottom: 18 },
+  label: { display: 'block', fontSize: 10, letterSpacing: '0.1em', color: '#6b7280', textTransform: 'uppercase', marginBottom: 6 },
+  input: { width: '100%', boxSizing: 'border-box', padding: '10px 12px', border: '1px solid #e8e0d4', borderRadius: 5, fontSize: 14, fontFamily: 'Georgia, serif', outline: 'none', color: '#0f1729', background: '#faf7f2' },
+  error: { fontSize: 12, color: '#dc2626', marginBottom: 14, padding: '8px 12px', background: '#fef2f2', borderRadius: 4 },
+  success: { fontSize: 12, color: '#16a34a', marginBottom: 14, padding: '8px 12px', background: '#f0fdf4', borderRadius: 4 },
+  btn: { width: '100%', padding: '12px', background: '#0f1729', color: '#c9a84c', border: 'none', borderRadius: 5, fontSize: 14, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold', letterSpacing: '0.04em' },
 }
+
