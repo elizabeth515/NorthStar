@@ -97,6 +97,9 @@ export default function Dashboard({ session }) {
   const [agents, setAgents] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [search, setSearch] = useState('')
+  const [agentFilter, setAgentFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [sortBy, setSortBy] = useState('name')
   const [tab, setTab] = useState('contacts')
   const [showingForm, setShowingForm] = useState(false)
   const [showingDraft, setShowingDraft] = useState(null)
@@ -105,6 +108,7 @@ export default function Dashboard({ session }) {
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [mindsetOpen, setMindsetOpen] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const saveTimers = useRef({})
 
   useEffect(() => {
@@ -215,9 +219,22 @@ export default function Dashboard({ session }) {
 
   const selected = buyers.find(b => b.id === selectedId)
   const currentAgent = agents.find(a => a.id === session.user.id)
+
   const filtered = buyers
-    .filter(b => b.clientName.toLowerCase().includes(search.toLowerCase()) || b.agentName.toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => (a.clientName || '').localeCompare(b.clientName || ''))
+    .filter(b => {
+      const matchSearch = b.clientName.toLowerCase().includes(search.toLowerCase()) ||
+        b.agentName.toLowerCase().includes(search.toLowerCase()) ||
+        (b.contacts?.[0]?.name || '').toLowerCase().includes(search.toLowerCase())
+      const matchAgent = agentFilter === 'all' || b.agentName === agentFilter
+      const matchStatus = statusFilter === 'all' || b.status === statusFilter
+      return matchSearch && matchAgent && matchStatus
+    })
+    .sort((a, b) => {
+      if (sortBy === 'name') return (a.clientName || '').localeCompare(b.clientName || '')
+      if (sortBy === 'newest') return new Date(b.createdAt) - new Date(a.createdAt)
+      if (sortBy === 'move') return new Date(a.targetMoveDate || '9999') - new Date(b.targetMoveDate || '9999')
+      return 0
+    })
 
   if (loading) return <div style={s.center}>Loading...</div>
 
@@ -235,7 +252,7 @@ export default function Dashboard({ session }) {
         </div>
 
         <button style={s.mindsetToggle} onClick={() => setMindsetOpen(o => !o)}>
-          <span>MINDSET</span><span>{mindsetOpen ? '▲' : '▼'}</span>
+          <span>MINDSET</span><span style={s.toggleArrow}>{mindsetOpen ? '▲' : '▼'}</span>
         </button>
         {mindsetOpen && (
           <div style={s.mindsetPanel}>
@@ -250,29 +267,73 @@ export default function Dashboard({ session }) {
 
         <div style={s.divider} />
 
-        <div style={s.buyerSection}>
-          <div style={s.buyerHeader}>
-            <input style={s.search} placeholder="Search buyers..." value={search} onChange={e => setSearch(e.target.value)} />
-            <button style={s.addBtn} onClick={addBuyer}>+</button>
-          </div>
-          <div style={s.buyerList}>
-            {filtered.length === 0 && <div style={s.emptyList}>No buyers yet.</div>}
-            {filtered.map(b => {
-              const isActive = b.id === selectedId
-              const badge = STATUS_BADGE[b.status] || STATUS_BADGE['Active']
-              return (
-                <div key={b.id} style={{ ...s.buyerItem, ...(isActive ? s.buyerItemActive : {}) }}
-                  onClick={() => { setSelectedId(b.id); setTab('contacts'); setShowingForm(false) }}>
-                  <div style={s.buyerName}>{b.clientName || 'Unnamed Buyer'}</div>
-                  {b.contacts?.[1]?.name && <div style={s.buyerSpouse}>& {b.contacts[1].name}</div>}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-                    <div style={s.buyerAgent}>{b.agentName || 'No agent'}</div>
-                    <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, background: badge.bg, color: badge.color, border: `1px solid ${badge.border}` }}>{b.status}</span>
-                  </div>
+        {/* Search + add */}
+        <div style={s.buyerHeader}>
+          <input style={s.search} placeholder="Search buyers..." value={search} onChange={e => setSearch(e.target.value)} />
+          <button style={s.addBtn} onClick={addBuyer} title="Add buyer">+</button>
+        </div>
+
+        {/* Filter bar */}
+        <div style={s.filterBar}>
+          <button style={s.filterToggle} onClick={() => setFiltersOpen(o => !o)}>
+            <span>Filter &amp; Sort</span>
+            <span style={s.toggleArrow}>{filtersOpen ? '▲' : '▼'}</span>
+          </button>
+          {filtersOpen && (
+            <div style={s.filterPanel}>
+              <div style={s.filterRow}>
+                <div style={s.filterLabel}>AGENT</div>
+                <select style={s.filterSelect} value={agentFilter} onChange={e => setAgentFilter(e.target.value)}>
+                  <option value="all">All agents</option>
+                  {agents.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
+                </select>
+              </div>
+              <div style={s.filterRow}>
+                <div style={s.filterLabel}>STATUS</div>
+                <div style={s.statusChips}>
+                  {['all', ...STATUSES].map(st => (
+                    <button key={st} style={{ ...s.chip, ...(statusFilter === st ? s.chipActive : {}) }} onClick={() => setStatusFilter(st)}>
+                      {st === 'all' ? 'All' : st === 'Under Contract' ? 'Contract' : st}
+                    </button>
+                  ))}
                 </div>
-              )
-            })}
-          </div>
+              </div>
+              <div style={s.filterRow}>
+                <div style={s.filterLabel}>SORT</div>
+                <select style={s.filterSelect} value={sortBy} onChange={e => setSortBy(e.target.value)}>
+                  <option value="name">Name A–Z</option>
+                  <option value="newest">Newest first</option>
+                  <option value="move">Target move date</option>
+                </select>
+              </div>
+              {(agentFilter !== 'all' || statusFilter !== 'all') && (
+                <button style={s.clearFilters} onClick={() => { setAgentFilter('all'); setStatusFilter('all') }}>Clear filters</button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Buyer count */}
+        <div style={s.buyerCount}>{filtered.length} buyer{filtered.length !== 1 ? 's' : ''}</div>
+
+        {/* Buyer list */}
+        <div style={s.buyerList}>
+          {filtered.length === 0 && <div style={s.emptyList}>No buyers match.</div>}
+          {filtered.map(b => {
+            const isActive = b.id === selectedId
+            const badge = STATUS_BADGE[b.status] || STATUS_BADGE['Active']
+            return (
+              <div key={b.id} style={{ ...s.buyerItem, ...(isActive ? s.buyerItemActive : {}) }}
+                onClick={() => { setSelectedId(b.id); setTab('contacts'); setShowingForm(false) }}>
+                <div style={s.buyerName}>{b.clientName || 'Unnamed Buyer'}</div>
+                {b.contacts?.[1]?.name && <div style={s.buyerSpouse}>& {b.contacts[1].name}</div>}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                  <div style={s.buyerAgent}>{b.agentName || 'No agent'}</div>
+                  <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 3, background: badge.bg, color: badge.color, border: `1px solid ${badge.border}` }}>{b.status}</span>
+                </div>
+              </div>
+            )
+          })}
         </div>
       </aside>
 
@@ -308,49 +369,13 @@ export default function Dashboard({ session }) {
               </div>
             </div>
 
-            {/* ── NORTH STAR ── always pinned */}
-            <div style={s.nsPinned}>
-              <div style={s.nsTopRow}>
-                <div style={s.nsLabelRow}>
-                  <span style={s.nsLabel}>NORTH STAR HYPOTHESIS</span>
-                  <div style={s.nsBar}><div style={{ ...s.nsBarFill, width: `${Math.round(nsComplete(selected.northStar)/6*100)}%` }} /></div>
-                  <span style={s.nsCount}>{nsComplete(selected.northStar)}/6</span>
-                </div>
-                <button style={s.nsEditBtn} onClick={() => setNsExpanded(o => !o)}>
-                  {nsExpanded ? 'Done' : 'Edit'}
-                </button>
-              </div>
-
-              {!nsExpanded ? (
-                <div style={s.nsReadView} onClick={() => setNsExpanded(true)}>
-                  {nsComplete(selected.northStar) === 0 ? (
-                    <span style={s.nsEmpty}>Tap Edit to build the North Star hypothesis →</span>
-                  ) : (
-                    <span style={s.nsReadText}>
-                      {selected.northStar.propertyType || '___'} in {selected.northStar.location || '___'} · {selected.northStar.motivation || '___'} · {selected.northStar.whatMattersMost || '___'}
-                    </span>
-                  )}
-                </div>
-              ) : (
-                <div style={s.nsForm}>
-                  <NSRow label="Will purchase a"><NSInput value={selected.northStar.propertyType} placeholder="property type" onChange={v => updateNS('propertyType', v)} /></NSRow>
-                  <NSRow label="In"><NSInput value={selected.northStar.location} placeholder="location / neighborhood" onChange={v => updateNS('location', v)} /></NSRow>
-                  <NSRow label="Because they are trying to"><NSInput value={selected.northStar.motivation} placeholder="core motivation" onChange={v => updateNS('motivation', v)} wide /></NSRow>
-                  <NSRow label="What matters most is"><NSInput value={selected.northStar.whatMattersMost} placeholder="top priority" onChange={v => updateNS('whatMattersMost', v)} wide /></NSRow>
-                  <NSRow label="Will trade"><NSInput value={selected.northStar.willingToTrade} placeholder="what they'll give up" onChange={v => updateNS('willingToTrade', v)} /></NSRow>
-                  <NSRow label="For"><NSInput value={selected.northStar.tradeFor} placeholder="what they'll gain" onChange={v => updateNS('tradeFor', v)} /></NSRow>
-                </div>
-              )}
-            </div>
+            {/* ── NORTH STAR ── */}
+            <NorthStar buyer={selected} updateNS={updateNS} nsExpanded={nsExpanded} setNsExpanded={setNsExpanded} />
 
             {/* ── ACTION BUTTONS ── */}
             <div style={s.actionBar}>
-              <button style={s.actionBtn} onClick={() => { setNsExpanded(true) }}>
-                ✎ Update North Star
-              </button>
-              <button style={s.actionBtnPrimary} onClick={openNewShowing}>
-                + Log Showing
-              </button>
+              <button style={s.actionBtn} onClick={() => setNsExpanded(o => !o)}>✎ Update North Star</button>
+              <button style={s.actionBtnPrimary} onClick={openNewShowing}>+ Log Showing</button>
             </div>
 
             {/* ── TABS ── */}
@@ -361,21 +386,12 @@ export default function Dashboard({ session }) {
             </div>
 
             <div style={s.tabContent}>
-              {tab === 'contacts' && <ContactsTab buyer={selected} updateBuyer={updateBuyer} />}
-              {tab === 'details' && <DetailsTab buyer={selected} updateBuyer={updateBuyer} agents={agents} />}
-              {tab === 'financials' && <FinancialsTab buyer={selected} updateBuyer={updateBuyer} />}
-              {tab === 'profile' && <ProfileTab buyer={selected} updateProfile={updateProfile} />}
-              {tab === 'showings' && (
-                <ShowingsTab
-                  buyer={selected}
-                  showingForm={showingForm} setShowingForm={setShowingForm}
-                  showingDraft={showingDraft} setShowingDraft={setShowingDraft}
-                  editingShowing={editingShowing}
-                  saveShowing={saveShowing} deleteShowing={deleteShowing}
-                  openNewShowing={openNewShowing} openEditShowing={openEditShowing}
-                />
-              )}
-              {tab === 'refinements' && <RefinementsTab buyer={selected} />}
+              {tab === 'contacts'     && <ContactsTab buyer={selected} updateBuyer={updateBuyer} />}
+              {tab === 'details'      && <DetailsTab buyer={selected} updateBuyer={updateBuyer} agents={agents} />}
+              {tab === 'financials'   && <FinancialsTab buyer={selected} updateBuyer={updateBuyer} />}
+              {tab === 'profile'      && <ProfileTab buyer={selected} updateProfile={updateProfile} />}
+              {tab === 'showings'     && <ShowingsTab buyer={selected} showingForm={showingForm} setShowingForm={setShowingForm} showingDraft={showingDraft} setShowingDraft={setShowingDraft} editingShowing={editingShowing} saveShowing={saveShowing} deleteShowing={deleteShowing} openEditShowing={openEditShowing} />}
+              {tab === 'refinements'  && <RefinementsTab buyer={selected} />}
             </div>
           </>
         )}
@@ -384,17 +400,99 @@ export default function Dashboard({ session }) {
   )
 }
 
-// ─── NS HELPERS ───────────────────────────────────────────────────────────────
-function NSRow({ label, children }) {
+// ─── NORTH STAR ───────────────────────────────────────────────────────────────
+function NorthStar({ buyer, updateNS, nsExpanded, setNsExpanded }) {
+  const ns = buyer.northStar
+  const count = nsComplete(ns)
+  const pct = Math.round((count / 6) * 100)
+
   return (
-    <div style={s.nsRow}>
-      <span style={s.nsRowLabel}>{label}</span>
-      {children}
+    <div style={s.nsPinned}>
+      <div style={s.nsTopRow}>
+        <div style={s.nsLabelRow}>
+          <span style={s.nsLabel}>NORTH STAR HYPOTHESIS</span>
+          <div style={s.nsBar}><div style={{ ...s.nsBarFill, width: `${pct}%` }} /></div>
+          <span style={s.nsCount}>{count}/6</span>
+        </div>
+        <button style={s.nsEditBtn} onClick={() => setNsExpanded(o => !o)}>
+          {nsExpanded ? 'Collapse' : 'Edit'}
+        </button>
+      </div>
+
+      {/* Collapsed chip view */}
+      {!nsExpanded && (
+        <div style={s.nsChips} onClick={() => setNsExpanded(true)}>
+          {[
+            { val: ns.propertyType && ns.location ? `${ns.propertyType} · ${ns.location}` : null, empty: 'Buyer not set' },
+            { val: ns.motivation || null, empty: 'Why not set' },
+            { val: ns.whatMattersMost || null, empty: 'Priority not set' },
+            { val: ns.willingToTrade && ns.tradeFor ? `Trade: ${ns.willingToTrade} → ${ns.tradeFor}` : null, empty: 'Trade not set' },
+          ].map((item, i) => (
+            <span key={i} style={item.val ? s.nsChipFilled : s.nsChipEmpty}>{item.val || item.empty}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Expanded bucket view */}
+      {nsExpanded && (
+        <div style={s.nsBuckets}>
+          {/* THE BUYER */}
+          <div style={s.nsBucket}>
+            <div style={s.nsBucketHeader}>
+              <div style={s.nsBucketTitle}>THE BUYER</div>
+              <div style={s.nsBucketSub}>What + where</div>
+            </div>
+            <div style={s.nsBucketBody}>
+              <div>
+                <FL>Property Type</FL>
+                <input style={s.nsField} value={ns.propertyType} placeholder="e.g. single family home" onChange={e => updateNS('propertyType', e.target.value)} />
+              </div>
+              <div>
+                <FL>Location</FL>
+                <input style={s.nsField} value={ns.location} placeholder="e.g. Green Hills" onChange={e => updateNS('location', e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          {/* THE WHY */}
+          <div style={s.nsBucket}>
+            <div style={s.nsBucketHeader}>
+              <div style={s.nsBucketTitle}>THE WHY</div>
+              <div style={s.nsBucketSub}>Motivation + priority</div>
+            </div>
+            <div style={s.nsBucketBody}>
+              <div>
+                <FL>Core Motivation</FL>
+                <input style={s.nsField} value={ns.motivation} placeholder="e.g. upsize for growing family" onChange={e => updateNS('motivation', e.target.value)} />
+              </div>
+              <div>
+                <FL>What Matters Most</FL>
+                <input style={s.nsField} value={ns.whatMattersMost} placeholder="e.g. school district" onChange={e => updateNS('whatMattersMost', e.target.value)} />
+              </div>
+            </div>
+          </div>
+
+          {/* THE TRADE */}
+          <div style={s.nsBucket}>
+            <div style={s.nsBucketHeader}>
+              <div style={s.nsBucketTitle}>THE TRADE</div>
+              <div style={s.nsBucketSub}>Give up + gain</div>
+            </div>
+            <div style={s.nsBucketBody}>
+              <div>
+                <FL>Will Give Up</FL>
+                <input style={s.nsField} value={ns.willingToTrade} placeholder="e.g. proximity to work" onChange={e => updateNS('willingToTrade', e.target.value)} />
+              </div>
+              <div>
+                <FL>In Exchange For</FL>
+                <input style={s.nsField} value={ns.tradeFor} placeholder="e.g. space and yard" onChange={e => updateNS('tradeFor', e.target.value)} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
-}
-function NSInput({ value, placeholder, onChange, wide }) {
-  return <input style={{ ...s.nsInput, ...(wide ? { flex: 1, minWidth: 180 } : {}) }} value={value} placeholder={placeholder} onChange={e => onChange(e.target.value)} />
 }
 
 // ─── CONTACTS TAB ─────────────────────────────────────────────────────────────
@@ -502,18 +600,18 @@ function FinancialsTab({ buyer, updateBuyer }) {
 function ProfileTab({ buyer, updateProfile }) {
   return (
     <div style={s.pane}>
-      <div style={s.profileNote}>Use this to build the clearest picture possible. These inform the North Star.</div>
+      <div style={s.profileNote}>These inform the North Star. Build the clearest picture possible.</div>
       <div style={s.formGrid}>
         <div>
           <FL>The Friction — what are they moving away from?</FL>
-          <textarea style={s.textarea} value={buyer.profile.friction} placeholder="What's broken or unsustainable in their current situation?" onChange={e => updateProfile('friction', e.target.value)} />
+          <textarea style={s.textarea} value={buyer.profile.friction} placeholder="What's broken or unsustainable?" onChange={e => updateProfile('friction', e.target.value)} />
         </div>
         <div>
           <FL>The Gain — what are they moving toward?</FL>
-          <textarea style={s.textarea} value={buyer.profile.gain} placeholder="What does success look like for them?" onChange={e => updateProfile('gain', e.target.value)} />
+          <textarea style={s.textarea} value={buyer.profile.gain} placeholder="What does success look like?" onChange={e => updateProfile('gain', e.target.value)} />
         </div>
         <div>
-          <FL>Non-Negotiables — what kills a house immediately?</FL>
+          <FL>Non-Negotiables</FL>
           <textarea style={s.textarea} value={buyer.profile.nonNegotiables} placeholder="Hard limits, deal-breakers..." onChange={e => updateProfile('nonNegotiables', e.target.value)} />
         </div>
         <div>
@@ -526,7 +624,7 @@ function ProfileTab({ buyer, updateProfile }) {
 }
 
 // ─── SHOWINGS TAB ─────────────────────────────────────────────────────────────
-function ShowingsTab({ buyer, showingForm, showingDraft, setShowingDraft, editingShowing, saveShowing, deleteShowing, openEditShowing }) {
+function ShowingsTab({ buyer, showingForm, setShowingForm, showingDraft, setShowingDraft, editingShowing, saveShowing, deleteShowing, openEditShowing }) {
   const upd = (k, v) => setShowingDraft(d => ({ ...d, [k]: v }))
   const sorted = [...buyer.showings].sort((a, b) => new Date(b.date) - new Date(a.date))
 
@@ -535,7 +633,7 @@ function ShowingsTab({ buyer, showingForm, showingDraft, setShowingDraft, editin
       <div style={s.pane}>
         <div style={s.showingFormHeader}>
           <span style={s.sectionLabel}>{editingShowing ? 'Edit Showing' : 'Log a Showing'}</span>
-          <button style={s.ghostBtn} onClick={() => { setShowingDraft(null) }}>Cancel</button>
+          <button style={s.ghostBtn} onClick={() => { setShowingForm(false); setShowingDraft(null) }}>Cancel</button>
         </div>
         <div style={s.formGrid}>
           <div>
@@ -548,26 +646,11 @@ function ShowingsTab({ buyer, showingForm, showingDraft, setShowingDraft, editin
           </div>
         </div>
         <div style={s.showingFields}>
-          <div>
-            <FL>What they responded to — lingered on, got excited about</FL>
-            <textarea style={s.textarea} value={showingDraft.respondedTo} placeholder="Features, rooms, moments that created energy..." onChange={e => upd('respondedTo', e.target.value)} />
-          </div>
-          <div>
-            <FL>What they pulled back from — dismissed or hesitated on</FL>
-            <textarea style={s.textarea} value={showingDraft.pulledBackFrom} placeholder="What they brushed past, questioned, or rejected..." onChange={e => upd('pulledBackFrom', e.target.value)} />
-          </div>
-          <div>
-            <FL>What became more true about the hypothesis</FL>
-            <textarea style={s.textarea} value={showingDraft.moreTrue} placeholder="Evidence that confirmed what we believed..." onChange={e => upd('moreTrue', e.target.value)} />
-          </div>
-          <div>
-            <FL>What became less true about the hypothesis</FL>
-            <textarea style={s.textarea} value={showingDraft.lessTrue} placeholder="Evidence that challenged what we believed..." onChange={e => upd('lessTrue', e.target.value)} />
-          </div>
-          <div>
-            <FL>How does the North Star change?</FL>
-            <textarea style={{ ...s.textarea, borderColor: '#b0c8a0' }} value={showingDraft.hypothesisUpdate} placeholder="How does this shift the picture?" onChange={e => upd('hypothesisUpdate', e.target.value)} />
-          </div>
+          <div><FL>What they responded to — lingered on, got excited about</FL><textarea style={s.textarea} value={showingDraft.respondedTo} placeholder="Features, rooms, moments that created energy..." onChange={e => upd('respondedTo', e.target.value)} /></div>
+          <div><FL>What they pulled back from — dismissed or hesitated on</FL><textarea style={s.textarea} value={showingDraft.pulledBackFrom} placeholder="What they brushed past, questioned, or rejected..." onChange={e => upd('pulledBackFrom', e.target.value)} /></div>
+          <div><FL>What became more true about the hypothesis</FL><textarea style={s.textarea} value={showingDraft.moreTrue} placeholder="Evidence that confirmed what we believed..." onChange={e => upd('moreTrue', e.target.value)} /></div>
+          <div><FL>What became less true about the hypothesis</FL><textarea style={s.textarea} value={showingDraft.lessTrue} placeholder="Evidence that challenged what we believed..." onChange={e => upd('lessTrue', e.target.value)} /></div>
+          <div><FL>How does the North Star change?</FL><textarea style={{ ...s.textarea, borderColor: '#b0c8a0' }} value={showingDraft.hypothesisUpdate} placeholder="How does this shift the picture?" onChange={e => upd('hypothesisUpdate', e.target.value)} /></div>
         </div>
         <button style={s.primaryBtn} onClick={() => saveShowing(showingDraft)}>Save showing</button>
       </div>
@@ -614,12 +697,13 @@ function RefinementsTab({ buyer }) {
     <div style={s.pane}>
       <div style={s.sectionLabel}>HYPOTHESIS EVOLUTION</div>
       {buyer.showings.length === 0
-        ? <div style={s.emptyList}>Log showings to track how the hypothesis evolves over time.</div>
+        ? <div style={s.emptyList}>Log showings to track how the hypothesis evolves.</div>
         : (
           <div style={s.timeline}>
             <div style={s.timelineItem}>
               <div style={s.timelineDot} />
-              <div><div style={s.timelineLabel}>Initial hypothesis</div>
+              <div>
+                <div style={s.timelineLabel}>Initial hypothesis</div>
                 <div style={s.timelineText}>{count > 0 ? `${ns.propertyType || '—'} in ${ns.location || '—'} · ${ns.motivation || '—'}` : 'Not yet built.'}</div>
               </div>
             </div>
@@ -628,7 +712,8 @@ function RefinementsTab({ buyer }) {
               : withUpdates.map((sh, i) => (
                 <div key={sh.id} style={s.timelineItem}>
                   <div style={s.timelineDot} />
-                  <div><div style={s.timelineLabel}>After showing {i + 1}{sh.address ? ` · ${sh.address}` : ''}</div>
+                  <div>
+                    <div style={s.timelineLabel}>After showing {i + 1}{sh.address ? ` · ${sh.address}` : ''}</div>
                     <div style={s.timelineText}>{sh.hypothesisUpdate}</div>
                   </div>
                 </div>
@@ -690,7 +775,7 @@ const s = {
   shell: { display: 'flex', height: '100vh', fontFamily: "Georgia, 'Times New Roman', serif", background: '#f5f2ee', color: '#1e1c1a', overflow: 'hidden' },
   center: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', flex: 1 },
 
-  sidebar: { width: 220, minWidth: 220, background: '#edeae5', borderRight: '1px solid #ddd8d0', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
+  sidebar: { width: 230, minWidth: 230, background: '#edeae5', borderRight: '1px solid #ddd8d0', display: 'flex', flexDirection: 'column', overflow: 'hidden' },
   sidebarTop: { padding: '14px 14px 10px', borderBottom: '1px solid #ddd8d0' },
   brandMark: { fontSize: 9, letterSpacing: '0.22em', color: '#4a6e3a', fontWeight: 'bold', marginBottom: 2 },
   brandSub: { fontSize: 10, color: '#a09a8e', marginBottom: 8 },
@@ -698,15 +783,29 @@ const s = {
   userName: { fontSize: 11, color: '#5a5550' },
   signOutBtn: { fontSize: 10, color: '#a09a8e', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif' },
   mindsetToggle: { display: 'flex', justifyContent: 'space-between', padding: '9px 14px', background: 'none', border: 'none', borderBottom: '1px solid #ddd8d0', cursor: 'pointer', width: '100%', fontFamily: 'Georgia, serif', fontSize: 9, letterSpacing: '0.16em', color: '#6a6460', fontWeight: 'bold' },
-  mindsetPanel: { padding: '12px 14px', borderBottom: '1px solid #ddd8d0', background: '#e8e4de', overflowY: 'auto', maxHeight: 260 },
+  toggleArrow: { fontSize: 8 },
+  mindsetPanel: { padding: '12px 14px', borderBottom: '1px solid #ddd8d0', background: '#e8e4de', overflowY: 'auto', maxHeight: 240 },
   mindsetItem: { marginBottom: 12 },
   mindsetTitle: { fontSize: 11, fontWeight: 'bold', color: '#2a2521', marginBottom: 3 },
   mindsetBody: { fontSize: 11, color: '#5a5550', lineHeight: 1.6 },
   divider: { height: 1, background: '#ddd8d0' },
-  buyerSection: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', paddingTop: 10 },
-  buyerHeader: { display: 'flex', gap: 6, padding: '0 12px 8px', alignItems: 'center' },
+
+  buyerHeader: { display: 'flex', gap: 6, padding: '10px 12px 6px', alignItems: 'center' },
   search: { flex: 1, padding: '6px 10px', border: '1px solid #d0cbc4', borderRadius: 3, background: '#f5f2ee', fontSize: 12, fontFamily: 'Georgia, serif', color: '#1e1c1a', outline: 'none' },
   addBtn: { width: 28, height: 28, background: '#4a6e3a', color: '#fff', border: 'none', borderRadius: 3, fontSize: 20, cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', lineHeight: 1 },
+
+  filterBar: { padding: '0 12px 6px' },
+  filterToggle: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', padding: '5px 8px', background: 'none', border: '1px solid #d0cbc4', borderRadius: 3, cursor: 'pointer', fontFamily: 'Georgia, serif', fontSize: 11, color: '#6a6460' },
+  filterPanel: { padding: '10px 8px 6px', display: 'flex', flexDirection: 'column', gap: 10 },
+  filterRow: { display: 'flex', flexDirection: 'column', gap: 4 },
+  filterLabel: { fontSize: 9, letterSpacing: '0.12em', color: '#a09a8e', fontWeight: 'bold' },
+  filterSelect: { width: '100%', padding: '5px 8px', border: '1px solid #d0cbc4', borderRadius: 3, background: '#f5f2ee', fontSize: 12, fontFamily: 'Georgia, serif', cursor: 'pointer', color: '#1e1c1a' },
+  statusChips: { display: 'flex', flexWrap: 'wrap', gap: 4 },
+  chip: { padding: '3px 7px', fontSize: 10, borderRadius: 3, border: '1px solid #d0cbc4', background: 'transparent', cursor: 'pointer', color: '#6a6460', fontFamily: 'Georgia, serif' },
+  chipActive: { background: '#4a6e3a', color: '#fff', borderColor: '#4a6e3a' },
+  clearFilters: { fontSize: 11, color: '#a06050', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif', textAlign: 'left', padding: '0 8px' },
+
+  buyerCount: { fontSize: 10, color: '#a09a8e', padding: '2px 14px 6px', letterSpacing: '0.06em' },
   buyerList: { flex: 1, overflowY: 'auto' },
   buyerItem: { padding: '10px 14px', cursor: 'pointer', borderBottom: '1px solid #ddd8d0' },
   buyerItemActive: { background: '#f5f2ee', borderLeft: '3px solid #4a6e3a', paddingLeft: 11 },
@@ -724,20 +823,25 @@ const s = {
   statusSelect: { padding: '5px 10px', borderRadius: 3, border: '1px solid #d0cbc4', background: '#f5f2ee', fontSize: 12, fontFamily: 'Georgia, serif', cursor: 'pointer' },
 
   nsPinned: { background: '#fff', borderBottom: '1px solid #ddd8d0', padding: '12px 24px', flexShrink: 0 },
-  nsTopRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  nsTopRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   nsLabelRow: { display: 'flex', alignItems: 'center', gap: 10 },
   nsLabel: { fontSize: 9, letterSpacing: '0.18em', color: '#4a6e3a', fontWeight: 'bold' },
   nsBar: { width: 60, height: 3, background: '#e8e4de', borderRadius: 2, overflow: 'hidden' },
   nsBarFill: { height: '100%', background: '#4a6e3a', borderRadius: 2, transition: 'width 0.3s' },
   nsCount: { fontSize: 10, color: '#a09a8e' },
   nsEditBtn: { fontSize: 11, padding: '3px 12px', border: '1px solid #d0cbc4', borderRadius: 3, background: 'transparent', cursor: 'pointer', fontFamily: 'Georgia, serif', color: '#5a5550' },
-  nsReadView: { cursor: 'pointer', minHeight: 24 },
-  nsEmpty: { fontSize: 13, color: '#b0a898', fontStyle: 'italic' },
-  nsReadText: { fontSize: 13, color: '#3a3530', lineHeight: 1.5 },
-  nsForm: { display: 'flex', flexDirection: 'column', gap: 6 },
-  nsRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  nsRowLabel: { fontSize: 13, color: '#7a7570', whiteSpace: 'nowrap' },
-  nsInput: { fontSize: 13, color: '#2a5a1a', background: '#f0f7ea', border: '1px solid #c0d8b0', borderRadius: 3, padding: '4px 10px', outline: 'none', fontFamily: 'Georgia, serif', minWidth: 100 },
+
+  nsChips: { display: 'flex', flexWrap: 'wrap', gap: 6, cursor: 'pointer' },
+  nsChipFilled: { fontSize: 12, background: '#f0f7ea', border: '1px solid #c0d8b0', borderRadius: 3, padding: '4px 10px', color: '#2a5a1a' },
+  nsChipEmpty: { fontSize: 12, background: '#faf8f5', border: '1px dashed #d0cbc4', borderRadius: 3, padding: '4px 10px', color: '#b0a898', fontStyle: 'italic' },
+
+  nsBuckets: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 },
+  nsBucket: { border: '1px solid #e0dbd4', borderRadius: 5, overflow: 'hidden' },
+  nsBucketHeader: { background: '#f0f7ea', borderBottom: '1px solid #c8ddb8', padding: '8px 12px' },
+  nsBucketTitle: { fontSize: 9, letterSpacing: '0.16em', color: '#4a6e3a', fontWeight: 'bold' },
+  nsBucketSub: { fontSize: 10, color: '#7a9a6a', marginTop: 1 },
+  nsBucketBody: { padding: '12px', background: '#fff', display: 'flex', flexDirection: 'column', gap: 10 },
+  nsField: { width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: '1px solid #e0dbd4', borderRadius: 3, background: '#faf8f5', fontSize: 12, fontFamily: 'Georgia, serif', color: '#1e1c1a', outline: 'none' },
 
   actionBar: { display: 'flex', gap: 10, padding: '10px 24px', borderBottom: '1px solid #ddd8d0', background: '#faf8f5', flexShrink: 0 },
   actionBtn: { padding: '8px 16px', border: '1px solid #d0cbc4', borderRadius: 3, background: '#fff', fontSize: 13, cursor: 'pointer', fontFamily: 'Georgia, serif', color: '#3a3530' },
