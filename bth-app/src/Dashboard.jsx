@@ -154,6 +154,9 @@ export default function Dashboard({ session }) {
     setSaving(true)
     saveTimers.current[buyer.id] = setTimeout(async () => {
       await supabase.from('buyers').update(buyerToDb(buyer)).eq('id', buyer.id)
+      // Reload from DB after save to ensure local state matches server
+      const { data } = await supabase.from('buyers').select('*').eq('id', buyer.id).single()
+      if (data) setBuyers(p => p.map(b => b.id === data.id ? dbToBuyer(data) : b))
       setSaving(false)
     }, 800)
   }, [])
@@ -211,7 +214,7 @@ export default function Dashboard({ session }) {
     setShowingDraft(null)
     setEditingShowingId(null)
     setView('buyer')
-    setTab('northstar')
+    setTab('showings')
 
     if (updatedBuyer && (showing.respondedTo || showing.pulledBackFrom || showing.moreTrue || showing.lessTrue || showing.hypothesisUpdate)) {
       setAiLoading(true)
@@ -476,13 +479,7 @@ function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotific
       )}
 
       {aiNotification && (
-        <div style={s.aiNotifBar}>
-          <span style={s.aiNotifText}>✦ North Star updated — {aiNotification.count} field{aiNotification.count !== 1 ? 's' : ''} refined from showing</span>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button style={s.aiUndoBtn} onClick={() => undoAI(aiNotification.previous)}>Undo</button>
-            <button style={s.aiDismissBtn} onClick={() => setAiNotification(null)}>✕</button>
-          </div>
-        </div>
+        <AiUpdatePanel notification={aiNotification} onUndo={() => undoAI(aiNotification.previous)} onDismiss={() => setAiNotification(null)} />
       )}
 
       <div style={s.tabBar}>
@@ -502,10 +499,224 @@ function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotific
   )
 }
 
+
+// ─── VOICE INTERVIEW ─────────────────────────────────────────────────────────
+function useVoiceField(onResult) {
+  const recogRef = useRef(null)
+  const silenceTimer = useRef(null)
+  const [listening, setListening] = useState(false)
+  const [transcript, setTranscript] = useState('')
+
+  const stop = () => {
+    if (recogRef.current) { try { recogRef.current.stop() } catch (_) {} }
+    if (silenceTimer.current) clearTimeout(silenceTimer.current)
+    setListening(false)
+  }
+
+  const start = (onDone) => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SR) { alert('Voice input is not supported in this browser. Use Chrome or Safari.'); return }
+    const r = new SR()
+    r.continuous = true
+    r.interimResults = true
+    r.lang = 'en-US'
+    recogRef.current = r
+    let final = ''
+
+    r.onstart = () => { setListening(true); setTranscript('') }
+
+    r.onresult = (e) => {
+      let interim = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript
+        if (e.results[i].isFinal) final += t
+        else interim = t
+      }
+      setTranscript(final + interim)
+      if (silenceTimer.current) clearTimeout(silenceTimer.current)
+      silenceTimer.current = setTimeout(() => {
+        r.stop()
+        onDone(final || interim)
+      }, 5000)
+    }
+
+    r.onerror = () => stop()
+    r.onend = () => { setListening(false); if (silenceTimer.current) clearTimeout(silenceTimer.current) }
+    r.start()
+  }
+
+  return { start, stop, listening, transcript }
+}
+
+// Interview session: walks through questions one by one
+function VoiceInterview({ questions, onComplete, onClose }) {
+  const [idx, setIdx] = useState(0)
+  const [answers, setAnswers] = useState(questions.map(() => ''))
+  const [phase, setPhase] = useState('ready') // ready | listening | done
+  const { start, stop, listening, transcript } = useVoiceField()
+
+  const current = questions[idx]
+
+  const startListening = () => {
+    setPhase('listening')
+    start((answer) => {
+      const updated = [...answers]
+      updated[idx] = answer
+      setAnswers(updated)
+      if (idx < questions.length - 1) {
+        setTimeout(() => {
+          setIdx(i => i + 1)
+          setPhase('ready')
+        }, 400)
+      } else {
+        setPhase('done')
+        onComplete(updated)
+      }
+    })
+  }
+
+  const skip = () => {
+    stop()
+    if (idx < questions.length - 1) { setIdx(i => i + 1); setPhase('ready') }
+    else { setPhase('done'); onComplete(answers) }
+  }
+
+  const restart = (i) => { stop(); setIdx(i); setPhase('ready') }
+
+  if (phase === 'done') {
+    return (
+      <div style={vs.overlay}>
+        <div style={vs.panel}>
+          <div style={vs.header}>
+            <div style={vs.headerTitle}>Review your answers</div>
+            <button style={vs.closeBtn} onClick={onClose}>✕</button>
+          </div>
+          <div style={vs.reviewList}>
+            {questions.map((q, i) => (
+              <div key={i} style={vs.reviewItem}>
+                <div style={vs.reviewQ}>{q.label}</div>
+                <div style={vs.reviewA}>{answers[i] || <span style={{ color: '#a8a29e', fontStyle: 'italic' }}>Skipped</span>}</div>
+                <button style={vs.editAnswerBtn} onClick={() => restart(i)}>Re-record</button>
+              </div>
+            ))}
+          </div>
+          <div style={vs.reviewActions}>
+            <button style={vs.saveBtn} onClick={() => { onComplete(answers); onClose() }}>Save All Answers</button>
+            <button style={vs.cancelBtn} onClick={onClose}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={vs.overlay}>
+      <div style={vs.panel}>
+        <div style={vs.header}>
+          <div style={vs.progress}>{idx + 1} of {questions.length}</div>
+          <button style={vs.closeBtn} onClick={() => { stop(); onClose() }}>✕</button>
+        </div>
+        <div style={vs.progressBar}>
+          <div style={{ ...vs.progressFill, width: `${((idx) / questions.length) * 100}%` }} />
+        </div>
+
+        <div style={vs.questionArea}>
+          <div style={vs.questionText}>{current.prompt}</div>
+          {phase === 'listening' && (
+            <div style={vs.transcriptBox}>
+              {transcript || <span style={{ color: '#a8a29e', fontStyle: 'italic' }}>Listening…</span>}
+            </div>
+          )}
+          {phase === 'ready' && answers[idx] && (
+            <div style={vs.prevAnswer}>Previous: {answers[idx]}</div>
+          )}
+        </div>
+
+        <div style={vs.controls}>
+          {phase === 'ready' && (
+            <button style={vs.micBtn} onClick={startListening}>
+              <span style={vs.micIcon}>🎙</span>
+              <span>Tap to answer</span>
+            </button>
+          )}
+          {phase === 'listening' && (
+            <button style={vs.micBtnActive} onClick={skip}>
+              <span style={vs.micIcon}>⏹</span>
+              <span>Stop (or wait 5 sec)</span>
+            </button>
+          )}
+          <button style={vs.skipBtn} onClick={skip}>
+            {idx < questions.length - 1 ? 'Skip →' : 'Finish'}
+          </button>
+        </div>
+
+        <div style={vs.hint}>
+          {phase === 'listening' ? 'Speaking… pause 5 seconds to move on.' : 'Tap the mic and speak your answer naturally.'}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Mic button for individual fields
+function MicButton({ prompt, onResult }) {
+  const [open, setOpen] = useState(false)
+  if (!open) return (
+    <button style={vs.inlineMic} title={prompt} onClick={() => setOpen(true)}>🎙</button>
+  )
+  return (
+    <VoiceInterview
+      questions={[{ prompt, label: prompt }]}
+      onComplete={([ans]) => { if (ans) onResult(ans); setOpen(false) }}
+      onClose={() => setOpen(false)}
+    />
+  )
+}
+
+const vs = {
+  overlay:      { position: 'fixed', inset: 0, background: 'rgba(28,25,23,0.75)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 },
+  panel:        { background: '#fff', borderRadius: 12, width: '100%', maxWidth: 520, boxShadow: '0 20px 60px rgba(0,0,0,0.3)', fontFamily: "Georgia, serif" },
+  header:       { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 20px 10px' },
+  headerTitle:  { fontSize: 14, fontWeight: 'bold', color: '#1c1917' },
+  progress:     { fontSize: 12, color: '#a8a29e', letterSpacing: '0.06em' },
+  closeBtn:     { fontSize: 16, color: '#a8a29e', background: 'none', border: 'none', cursor: 'pointer' },
+  progressBar:  { height: 3, background: '#f0ebe3', margin: '0 20px 24px' },
+  progressFill: { height: '100%', background: '#b8962e', borderRadius: 2, transition: 'width 0.3s' },
+  questionArea: { padding: '0 24px 24px' },
+  questionText: { fontSize: 18, color: '#1c1917', lineHeight: 1.5, marginBottom: 16, fontWeight: 'bold' },
+  transcriptBox:{ background: '#faf7f2', border: '1px solid #e8e2d9', borderRadius: 6, padding: '12px 14px', fontSize: 14, color: '#1c1917', minHeight: 80, lineHeight: 1.6 },
+  prevAnswer:   { fontSize: 13, color: '#78716c', fontStyle: 'italic', padding: '8px 12px', background: '#faf7f2', borderRadius: 4 },
+  controls:     { display: 'flex', gap: 12, padding: '0 24px 16px', alignItems: 'center' },
+  micBtn:       { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '14px', background: '#1c1917', color: '#b8962e', border: 'none', borderRadius: 8, fontSize: 15, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
+  micBtnActive: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '14px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: 8, fontSize: 15, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
+  micIcon:      { fontSize: 20 },
+  skipBtn:      { padding: '12px 16px', border: '1px solid #e8e2d9', borderRadius: 8, background: '#fff', color: '#78716c', fontSize: 13, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  hint:         { fontSize: 12, color: '#a8a29e', textAlign: 'center', padding: '0 24px 20px', lineHeight: 1.5 },
+  inlineMic:    { padding: '4px 8px', background: 'none', border: '1px solid #e8e2d9', borderRadius: 4, cursor: 'pointer', fontSize: 14, color: '#a8a29e', marginLeft: 6, flexShrink: 0 },
+  reviewList:   { padding: '0 24px', maxHeight: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 14 },
+  reviewItem:   { borderBottom: '1px solid #f0ebe3', paddingBottom: 12 },
+  reviewQ:      { fontSize: 11, letterSpacing: '0.08em', color: '#a8a29e', textTransform: 'uppercase', marginBottom: 4 },
+  reviewA:      { fontSize: 14, color: '#1c1917', lineHeight: 1.5, marginBottom: 6 },
+  editAnswerBtn:{ fontSize: 11, color: '#b8962e', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif', padding: 0 },
+  reviewActions:{ display: 'flex', gap: 10, padding: '16px 24px 20px' },
+  saveBtn:      { flex: 1, padding: '11px', background: '#1c1917', color: '#b8962e', border: 'none', borderRadius: 6, fontSize: 14, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
+  cancelBtn:    { padding: '11px 16px', border: '1px solid #e8e2d9', borderRadius: 6, background: '#fff', color: '#78716c', fontSize: 13, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+}
+
 // ─── NORTH STAR TAB ───────────────────────────────────────────────────────────
 function NorthStarTab({ buyer, updateNS }) {
   const ns = buyer.northStar
   const count = nsComplete(ns)
+  const [voiceOpen, setVoiceOpen] = useState(false)
+
+  const nsQuestions = [
+    { key: 'propertyType', prompt: 'What type of home are they looking for?', label: 'Property Type' },
+    { key: 'location', prompt: 'What neighborhood or area are they focused on?', label: 'Location' },
+    { key: 'motivation', prompt: "What's driving this move — what are they trying to accomplish?", label: 'Core Motivation' },
+    { key: 'whatMattersMost', prompt: 'What matters most to them in a home?', label: 'What Matters Most' },
+    { key: 'willingToTrade', prompt: "What are they willing to give up?", label: 'Will Give Up' },
+    { key: 'tradeFor', prompt: 'What do they get in return for that trade?', label: 'In Exchange For' },
+  ]
 
   const coach = count === 0
     ? { msg: 'Start here. What did this buyer tell you in the first conversation?', bg: '#eff6ff', color: '#1d4ed8' }
@@ -519,9 +730,20 @@ function NorthStarTab({ buyer, updateNS }) {
 
   return (
     <div style={s.pane}>
-      <div style={{ ...s.coachCard, background: coach.bg }}>
-        <span style={{ fontSize: 13, color: coach.color, lineHeight: 1.6 }}>{coach.msg}</span>
+      {voiceOpen && (
+        <VoiceInterview
+          questions={nsQuestions}
+          onComplete={(answers) => { nsQuestions.forEach((q, i) => { if (answers[i]) updateNS(q.key, answers[i]) }) }}
+          onClose={() => setVoiceOpen(false)}
+        />
+      )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+        <div style={{ ...s.coachCard, background: coach.bg, flex: 1, marginRight: 12, marginBottom: 0 }}>
+          <span style={{ fontSize: 13, color: coach.color, lineHeight: 1.6 }}>{coach.msg}</span>
+        </div>
+        <button style={s.voiceInterviewBtn} onClick={() => setVoiceOpen(true)}>🎙 Voice Interview</button>
       </div>
+      <div style={{ marginBottom: 16 }} />
 
       <div style={s.nsBuckets}>
         <NsBucket
@@ -570,7 +792,10 @@ function NsBucket({ title, sub, fields, ns, updateNS }) {
       <div style={s.nsBucketBody}>
         {fields.map(f => (
           <div key={f.key}>
-            <FL>{f.label}</FL>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
+              <FL>{f.label}</FL>
+              <MicButton prompt={f.placeholder.replace('e.g. ', 'e.g., ')} onResult={v => updateNS(f.key, v)} />
+            </div>
             <input
               style={{ ...s.field, ...(ns[f.key] ? s.fieldFilled : {}) }}
               value={ns[f.key]}
@@ -630,9 +855,26 @@ function ContactsTab({ buyer, updateBuyer, agents }) {
 
 // ─── PROFILE TAB ─────────────────────────────────────────────────────────────
 function ProfileTab({ buyer, updateProfile }) {
+  const [voiceOpen, setVoiceOpen] = useState(false)
+  const profileQuestions = [
+    { key: 'friction', prompt: "What's broken or painful in their current situation — what are they moving away from?", label: 'The Friction' },
+    { key: 'gain', prompt: 'What does success look like for them — what are they moving toward?', label: 'The Gain' },
+    { key: 'nonNegotiables', prompt: 'What kills a house immediately for them — any hard limits or deal-breakers?', label: 'Non-Negotiables' },
+    { key: 'patterns', prompt: 'What themes keep coming up in your conversations with them?', label: 'Patterns' },
+  ]
   return (
     <div style={s.pane}>
-      <div style={s.profileNote}>These four inputs build the foundation. They feed directly into the North Star.</div>
+      {voiceOpen && (
+        <VoiceInterview
+          questions={profileQuestions}
+          onComplete={(answers) => { profileQuestions.forEach((q, i) => { if (answers[i]) updateProfile(q.key, answers[i]) }) }}
+          onClose={() => setVoiceOpen(false)}
+        />
+      )}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={s.profileNote}>These four inputs build the foundation. They feed directly into the North Star.</div>
+        <button style={s.voiceInterviewBtn} onClick={() => setVoiceOpen(true)}>🎙 Voice Interview</button>
+      </div>
       {[
         { key: 'friction', label: 'The Friction — what are they moving away from?', placeholder: 'What\'s broken or unsustainable in their current situation?' },
         { key: 'gain', label: 'The Gain — what are they moving toward?', placeholder: 'What does success look like for them?' },
@@ -640,10 +882,50 @@ function ProfileTab({ buyer, updateProfile }) {
         { key: 'patterns', label: 'Patterns — what keeps coming up?', placeholder: 'Recurring themes, consistent reactions…' },
       ].map(f => (
         <div key={f.key} style={{ marginBottom: 20 }}>
-          <FL>{f.label}</FL>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
+            <FL>{f.label}</FL>
+            <MicButton prompt={f.prompt} onResult={v => updateProfile(f.key, v)} />
+          </div>
           <textarea style={s.textarea} value={buyer.profile[f.key]} placeholder={f.placeholder} onChange={e => updateProfile(f.key, e.target.value)} />
         </div>
       ))}
+    </div>
+  )
+}
+
+// ─── AI UPDATE PANEL ─────────────────────────────────────────────────────────
+const NS_LABELS = {
+  propertyType: 'Property Type',
+  location: 'Location',
+  motivation: 'Core Motivation',
+  whatMattersMost: 'What Matters Most',
+  willingToTrade: 'Will Give Up',
+  tradeFor: 'In Exchange For',
+}
+
+function AiUpdatePanel({ notification, onUndo, onDismiss }) {
+  const { applied, previous } = notification
+  const changed = Object.keys(applied).filter(k => applied[k] !== previous[k] && applied[k])
+
+  return (
+    <div style={s.aiPanel}>
+      <div style={s.aiPanelTop}>
+        <span style={s.aiPanelTitle}>✦ North Star updated from showing</span>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button style={s.aiUndoBtn} onClick={onUndo}>Undo all</button>
+          <button style={s.aiDismissBtn} onClick={onDismiss}>✕</button>
+        </div>
+      </div>
+      <div style={s.aiChanges}>
+        {changed.map(k => (
+          <div key={k} style={s.aiChange}>
+            <span style={s.aiChangeField}>{NS_LABELS[k]}</span>
+            <span style={s.aiChangePrev}>{previous[k] || <em style={{ color: C.textMuted }}>was empty</em>}</span>
+            <span style={s.aiChangeArrow}>→</span>
+            <span style={s.aiChangeNext}>{applied[k]}</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -747,12 +1029,27 @@ function RefinementsTab({ buyer }) {
 // ─── SHOWING FORM ─────────────────────────────────────────────────────────────
 function ShowingForm({ draft, setDraft, onSave, onCancel, isEdit }) {
   const upd = (k, v) => setDraft(d => ({ ...d, [k]: v }))
+  const [voiceOpen, setVoiceOpen] = useState(false)
+  const showingQuestions = [
+    { key: 'respondedTo', prompt: 'What did they gravitate toward — what features, rooms, or moments created energy?', label: 'Responded To' },
+    { key: 'pulledBackFrom', prompt: 'What did they pull back from — what did they question, dismiss, or hesitate on?', label: 'Pulled Back From' },
+    { key: 'moreTrue', prompt: 'What feels more true about your hypothesis now — what confirmed what you believed?', label: 'More True' },
+    { key: 'lessTrue', prompt: 'What feels less true — what challenged your hypothesis?', label: 'Less True' },
+    { key: 'hypothesisUpdate', prompt: 'How does the North Star change based on this showing? Speak your update.', label: 'North Star Update' },
+  ]
   return (
     <div style={s.formScreen}>
+      {voiceOpen && (
+        <VoiceInterview
+          questions={showingQuestions}
+          onComplete={(answers) => { showingQuestions.forEach((q, i) => { if (answers[i]) upd(q.key, answers[i]) }) }}
+          onClose={() => setVoiceOpen(false)}
+        />
+      )}
       <div style={s.formTopBar}>
         <button style={s.backBtn} onClick={onCancel}>← Back</button>
         <div style={s.formTopTitle}>{isEdit ? 'Edit Showing' : 'Log a Showing'}</div>
-        <div style={{ width: 80 }} />
+        <button style={s.voiceInterviewBtnDark} onClick={() => setVoiceOpen(true)}>🎙 Voice Debrief</button>
       </div>
       <div style={s.formScroll}>
         <div style={s.formBody}>
@@ -895,12 +1192,19 @@ const s = {
   statusPill:   { fontSize: 11, padding: '2px 8px', borderRadius: 4 },
 
   // AI bars
-  aiLoadBar:    { background: '#292524', padding: '9px 24px', flexShrink: 0, borderBottom: '1px solid #3c3835' },
-  aiLoadText:   { fontSize: 12, color: C.gold, fontStyle: 'italic' },
-  aiNotifBar:   { background: C.goldLight, borderBottom: `1px solid #e6d4a0`, padding: '10px 24px', flexShrink: 0, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 },
-  aiNotifText:  { fontSize: 13, color: '#78501a', fontWeight: 'bold' },
-  aiUndoBtn:    { padding: '5px 12px', border: `1px solid #c9a84c`, borderRadius: 4, background: 'transparent', color: '#78501a', fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
-  aiDismissBtn: { fontSize: 14, color: '#a8925a', background: 'none', border: 'none', cursor: 'pointer' },
+  aiLoadBar:      { background: '#292524', padding: '9px 24px', flexShrink: 0, borderBottom: '1px solid #3c3835' },
+  aiLoadText:     { fontSize: 12, color: C.gold, fontStyle: 'italic' },
+  aiPanel:        { background: C.goldLight, borderBottom: '1px solid #e6d4a0', padding: '12px 24px', flexShrink: 0 },
+  aiPanelTop:     { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  aiPanelTitle:   { fontSize: 13, color: '#78501a', fontWeight: 'bold' },
+  aiChanges:      { display: 'flex', flexDirection: 'column', gap: 6 },
+  aiChange:       { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', fontSize: 13 },
+  aiChangeField:  { fontSize: 10, letterSpacing: '0.08em', color: C.gold, fontWeight: 'bold', textTransform: 'uppercase', minWidth: 130, flexShrink: 0 },
+  aiChangePrev:   { color: C.textMuted, textDecoration: 'line-through', fontSize: 13 },
+  aiChangeArrow:  { color: C.gold, fontWeight: 'bold', flexShrink: 0 },
+  aiChangeNext:   { color: '#5a3a0a', fontWeight: 'bold', fontSize: 13 },
+  aiUndoBtn:      { padding: '5px 12px', border: '1px solid #c9a84c', borderRadius: 4, background: 'transparent', color: '#78501a', fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  aiDismissBtn:   { fontSize: 14, color: '#a8925a', background: 'none', border: 'none', cursor: 'pointer' },
 
   // Tabs
   tabBar:    { display: 'flex', borderBottom: `1px solid ${C.border}`, flexShrink: 0, background: C.surface, overflowX: 'auto' },
@@ -969,6 +1273,10 @@ const s = {
   formSectionLabel:{ fontSize: 10, letterSpacing: '0.16em', color: C.textMuted, fontWeight: 'bold', paddingBottom: 8, borderBottom: `1px solid ${C.border}`, marginBottom: 4 },
   nsHint:          { fontSize: 12, color: C.gold, fontStyle: 'italic', marginBottom: 8 },
   saveShowingBtn:  { width: '100%', padding: '14px', border: 'none', borderRadius: 8, background: C.dark, color: C.gold, fontSize: 16, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold', marginTop: 8 },
+
+  // Voice button
+  voiceInterviewBtn:     { padding: '7px 14px', border: '1px solid #e8e2d9', borderRadius: 5, background: '#fff', color: '#1c1917', fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif', whiteSpace: 'nowrap', flexShrink: 0 },
+  voiceInterviewBtnDark: { padding: '7px 14px', border: '1px solid #3c3835', borderRadius: 5, background: 'transparent', color: C.gold, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif', whiteSpace: 'nowrap' },
 
   // Buttons
   primaryBtn: { padding: '9px 20px', border: 'none', borderRadius: 5, background: C.dark, color: C.gold, fontSize: 13, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
