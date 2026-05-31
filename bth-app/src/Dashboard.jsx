@@ -489,9 +489,9 @@ function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotific
       </div>
 
       <div style={s.tabContent}>
-        {tab === 'northstar'   && <NorthStarTab buyer={buyer} updateNS={updateNS} />}
+        {tab === 'northstar'   && <NorthStarTab buyer={buyer} updateNS={updateNS} updateBuyer={updateBuyer} />}
         {tab === 'contacts'    && <ContactsTab buyer={buyer} updateBuyer={updateBuyer} agents={agents} />}
-        {tab === 'profile'     && <ProfileTab buyer={buyer} updateProfile={updateProfile} />}
+        {tab === 'profile'     && <ProfileTab buyer={buyer} updateProfile={updateProfile} updateBuyer={updateBuyer} />}
         {tab === 'showings'    && <ShowingsTab buyer={buyer} openShowing={openShowing} deleteShowing={deleteShowing} />}
         {tab === 'refinements' && <RefinementsTab buyer={buyer} />}
       </div>
@@ -501,29 +501,57 @@ function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotific
 
 
 // ─── VOICE INTERVIEW ─────────────────────────────────────────────────────────
-function useVoiceField(onResult) {
+function VoiceInterview({ questions, onComplete, onClose }) {
+  const [idx, setIdx] = useState(0)
+  const [answers, setAnswers] = useState(questions.map(() => ''))
+  const [phase, setPhase] = useState('ready') // ready | listening | done
+  const [liveText, setLiveText] = useState('')
+  const answersRef = useRef(questions.map(() => ''))
+  const idxRef = useRef(0)
   const recogRef = useRef(null)
   const silenceTimer = useRef(null)
-  const [listening, setListening] = useState(false)
-  const [transcript, setTranscript] = useState('')
+  const latestTranscript = useRef('')
 
-  const stop = () => {
-    if (recogRef.current) { try { recogRef.current.stop() } catch (_) {} }
-    if (silenceTimer.current) clearTimeout(silenceTimer.current)
-    setListening(false)
+  const stopRecognition = () => {
+    if (silenceTimer.current) { clearTimeout(silenceTimer.current); silenceTimer.current = null }
+    if (recogRef.current) { try { recogRef.current.abort() } catch (_) {} recogRef.current = null }
   }
 
-  const start = (onDone) => {
+  const moveToNext = (savedAnswers) => {
+    const next = idxRef.current + 1
+    if (next < questions.length) {
+      idxRef.current = next
+      setIdx(next)
+      setLiveText('')
+      setPhase('ready')
+    } else {
+      setPhase('done')
+      onComplete(savedAnswers)
+    }
+  }
+
+  const saveAndAdvance = (text) => {
+    const trimmed = text.trim()
+    const updated = [...answersRef.current]
+    updated[idxRef.current] = trimmed
+    answersRef.current = updated
+    setAnswers([...updated])
+    moveToNext(updated)
+  }
+
+  const startListening = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) { alert('Voice input is not supported in this browser. Use Chrome or Safari.'); return }
+    if (!SR) { alert('Voice input requires Chrome or Safari.'); return }
+    setLiveText('')
+    setPhase('listening')
+    latestTranscript.current = ''
+
     const r = new SR()
     r.continuous = true
     r.interimResults = true
     r.lang = 'en-US'
     recogRef.current = r
     let final = ''
-
-    r.onstart = () => { setListening(true); setTranscript('') }
 
     r.onresult = (e) => {
       let interim = ''
@@ -532,73 +560,41 @@ function useVoiceField(onResult) {
         if (e.results[i].isFinal) final += t
         else interim = t
       }
-      setTranscript(final + interim)
+      const full = (final + interim).trim()
+      latestTranscript.current = full
+      setLiveText(full)
+
       if (silenceTimer.current) clearTimeout(silenceTimer.current)
       silenceTimer.current = setTimeout(() => {
-        r.stop()
-        onDone(final || interim)
+        stopRecognition()
+        saveAndAdvance(latestTranscript.current)
       }, 5000)
     }
 
-    r.onerror = () => stop()
-    r.onend = () => { setListening(false); if (silenceTimer.current) clearTimeout(silenceTimer.current) }
+    r.onerror = (e) => { if (e.error !== 'aborted') { stopRecognition(); setPhase('ready') } }
+    r.onend = () => {}
     r.start()
   }
 
-  return { start, stop, listening, transcript }
-}
-
-// Interview session: walks through questions one by one
-function VoiceInterview({ questions, onComplete, onClose }) {
-  const [idx, setIdx] = useState(0)
-  const [answers, setAnswers] = useState(questions.map(() => ''))
-  const answersRef = useRef(questions.map(() => ''))
-  const idxRef = useRef(0)
-  const [phase, setPhase] = useState('ready') // ready | listening | done
-  const { start, stop, listening, transcript } = useVoiceField()
-
-  const current = questions[idx]
-
-  const advance = (updatedAnswers) => {
-    const nextIdx = idxRef.current + 1
-    if (nextIdx < questions.length) {
-      setTimeout(() => {
-        idxRef.current = nextIdx
-        setIdx(nextIdx)
-        setPhase('ready')
-      }, 400)
-    } else {
-      setPhase('done')
-      onComplete(updatedAnswers)
-    }
-  }
-
-  const startListening = () => {
-    setPhase('listening')
-    start((answer) => {
-      const updated = [...answersRef.current]
-      updated[idxRef.current] = answer
-      answersRef.current = updated
-      setAnswers([...updated])
-      advance(updated)
-    })
+  const doneSpeaking = () => {
+    stopRecognition()
+    saveAndAdvance(latestTranscript.current)
   }
 
   const skip = () => {
-    stop()
-    const updated = [...answersRef.current]
-    const nextIdx = idxRef.current + 1
-    if (nextIdx < questions.length) {
-      idxRef.current = nextIdx
-      setIdx(nextIdx)
-      setPhase('ready')
-    } else {
-      setPhase('done')
-      onComplete(updated)
-    }
+    stopRecognition()
+    moveToNext(answersRef.current)
   }
 
-  const restart = (i) => { stop(); idxRef.current = i; setIdx(i); setPhase('ready') }
+  const restart = (i) => {
+    stopRecognition()
+    idxRef.current = i
+    setIdx(i)
+    setLiveText('')
+    setPhase('ready')
+  }
+
+  const current = questions[idx]
 
   if (phase === 'done') {
     return (
@@ -641,11 +637,11 @@ function VoiceInterview({ questions, onComplete, onClose }) {
           <div style={vs.questionText}>{current.prompt}</div>
           {phase === 'listening' && (
             <div style={vs.transcriptBox}>
-              {transcript || <span style={{ color: '#a8a29e', fontStyle: 'italic' }}>Listening…</span>}
+              {liveText || <span style={{ color: '#a8a29e', fontStyle: 'italic' }}>Listening…</span>}
             </div>
           )}
           {phase === 'ready' && answers[idx] && (
-            <div style={vs.prevAnswer}>Previous: {answers[idx]}</div>
+            <div style={vs.prevAnswer}>Previous answer: {answers[idx]}</div>
           )}
         </div>
 
@@ -657,7 +653,7 @@ function VoiceInterview({ questions, onComplete, onClose }) {
             </button>
           )}
           {phase === 'listening' && (
-            <button style={vs.micBtnActive} onClick={() => { stop(); advance(answersRef.current) }}>
+            <button style={vs.micBtnActive} onClick={doneSpeaking}>
               <span style={vs.micIcon}>⏹</span>
               <span>Done speaking</span>
             </button>
@@ -723,7 +719,7 @@ const vs = {
 }
 
 // ─── NORTH STAR TAB ───────────────────────────────────────────────────────────
-function NorthStarTab({ buyer, updateNS }) {
+function NorthStarTab({ buyer, updateNS, updateBuyer }) {
   const ns = buyer.northStar
   const count = nsComplete(ns)
   const [voiceOpen, setVoiceOpen] = useState(false)
@@ -752,7 +748,11 @@ function NorthStarTab({ buyer, updateNS }) {
       {voiceOpen && (
         <VoiceInterview
           questions={nsQuestions}
-          onComplete={(answers) => { nsQuestions.forEach((q, i) => { if (answers[i]) updateNS(q.key, answers[i]) }) }}
+          onComplete={(answers) => {
+            const newNS = { ...buyer.northStar }
+            nsQuestions.forEach((q, i) => { if (answers[i]) newNS[q.key] = answers[i] })
+            updateBuyer({ northStar: newNS })
+          }}
           onClose={() => setVoiceOpen(false)}
         />
       )}
@@ -873,7 +873,7 @@ function ContactsTab({ buyer, updateBuyer, agents }) {
 }
 
 // ─── PROFILE TAB ─────────────────────────────────────────────────────────────
-function ProfileTab({ buyer, updateProfile }) {
+function ProfileTab({ buyer, updateProfile, updateBuyer }) {
   const [voiceOpen, setVoiceOpen] = useState(false)
   const profileQuestions = [
     { key: 'friction', prompt: "What's broken or painful in their current situation — what are they moving away from?", label: 'The Friction' },
@@ -886,7 +886,11 @@ function ProfileTab({ buyer, updateProfile }) {
       {voiceOpen && (
         <VoiceInterview
           questions={profileQuestions}
-          onComplete={(answers) => { profileQuestions.forEach((q, i) => { if (answers[i]) updateProfile(q.key, answers[i]) }) }}
+          onComplete={(answers) => {
+            const newProfile = { ...buyer.profile }
+            profileQuestions.forEach((q, i) => { if (answers[i]) newProfile[q.key] = answers[i] })
+            updateBuyer({ profile: newProfile })
+          }}
           onClose={() => setVoiceOpen(false)}
         />
       )}
@@ -1061,7 +1065,11 @@ function ShowingForm({ draft, setDraft, onSave, onCancel, isEdit }) {
       {voiceOpen && (
         <VoiceInterview
           questions={showingQuestions}
-          onComplete={(answers) => { showingQuestions.forEach((q, i) => { if (answers[i]) upd(q.key, answers[i]) }) }}
+          onComplete={(answers) => {
+            const updates = {}
+            showingQuestions.forEach((q, i) => { if (answers[i]) updates[q.key] = answers[i] })
+            setDraft(d => ({ ...d, ...updates }))
+          }}
           onClose={() => setVoiceOpen(false)}
         />
       )}
