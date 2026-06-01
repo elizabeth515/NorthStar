@@ -262,8 +262,8 @@ export default function App({ session }) {
     if (updated && hasContent) {
       setAiLoading(true)
       try {
-        const res = await fetch('/api/suggest', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+        const res = await fetch('https://fvilkxrtgomawwlizwij.supabase.co/functions/v1/suggest', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ2aWxreHJ0Z29tYXd3bGl6d2lqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMTgwODQsImV4cCI6MjA5NTc5NDA4NH0.a_9eMlI6L_Ya0ekofyNHPTCBbM8RvD9QevkaU4SvS_U' },
           body: JSON.stringify({ type: 'debrief', northStar: updated.northStar, showing }),
         })
         const data = await res.json()
@@ -590,8 +590,8 @@ function MoveTab({ buyer, patchNS, patch }) {
     setIntakeError('')
     setExtracted(null)
     try {
-      const res = await fetch('/api/suggest', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const res = await fetch('https://fvilkxrtgomawwlizwij.supabase.co/functions/v1/suggest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ2aWxreHJ0Z29tYXd3bGl6d2lqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMTgwODQsImV4cCI6MjA5NTc5NDA4NH0.a_9eMlI6L_Ya0ekofyNHPTCBbM8RvD9QevkaU4SvS_U' },
         body: JSON.stringify({ type: 'intake', transcript: text }),
       })
       const data = await res.json()
@@ -1048,8 +1048,8 @@ function ManagerView({ buyers, agents, onBack, onSelect }) {
     const results = {}
     for (const ab of agentBuyers) {
       try {
-        const res = await fetch('/api/suggest', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+        const res = await fetch('https://fvilkxrtgomawwlizwij.supabase.co/functions/v1/suggest', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ2aWxreHJ0Z29tYXd3bGl6d2lqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMTgwODQsImV4cCI6MjA5NTc5NDA4NH0.a_9eMlI6L_Ya0ekofyNHPTCBbM8RvD9QevkaU4SvS_U' },
           body: JSON.stringify({ type: 'coaching_insights', agentName: ab.agent.name, buyers: ab.buyers }),
         })
         const data = await res.json()
@@ -1174,8 +1174,8 @@ function PerformanceView({ buyers, agentName, onBack }) {
     if (mine.length === 0) return
     setLoadingCoaching(true)
     try {
-      const res = await fetch('/api/suggest', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const res = await fetch('https://fvilkxrtgomawwlizwij.supabase.co/functions/v1/suggest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ2aWxreHJ0Z29tYXd3bGl6d2lqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMTgwODQsImV4cCI6MjA5NTc5NDA4NH0.a_9eMlI6L_Ya0ekofyNHPTCBbM8RvD9QevkaU4SvS_U' },
         body: JSON.stringify({ type: 'coaching_insights', agentName, buyers: mine }),
       })
       const data = await res.json()
