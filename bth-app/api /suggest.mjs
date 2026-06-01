@@ -1,6 +1,4 @@
-const https = require('https')
-
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*')
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type')
@@ -9,42 +7,19 @@ module.exports = async function handler(req, res) {
 
   const { type, transcript, northStar, showing, agentName, buyers } = req.body
 
-  const callAI = (prompt) => {
-    return new Promise((resolve, reject) => {
-      const body = JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 800,
-        messages: [{ role: 'user', content: prompt }]
-      })
-      const options = {
-        hostname: 'api.anthropic.com',
-        path: '/v1/messages',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-          'Content-Length': Buffer.byteLength(body)
-        }
-      }
-      const request = https.request(options, (response) => {
-        let data = ''
-        response.on('data', chunk => data += chunk)
-        response.on('end', () => {
-          try {
-            const parsed = JSON.parse(data)
-            const text = parsed.content?.[0]?.text || '{}'
-            const clean = text.replace(/```json|```/g, '').trim()
-            resolve(JSON.parse(clean))
-          } catch (e) {
-            reject(new Error('Parse error: ' + e.message + ' Raw: ' + data.slice(0, 200)))
-          }
-        })
-      })
-      request.on('error', reject)
-      request.write(body)
-      request.end()
+  const callAI = async (prompt) => {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 800, messages: [{ role: 'user', content: prompt }] }),
     })
+    const d = await r.json()
+    const text = d.content?.[0]?.text || '{}'
+    return JSON.parse(text.replace(/```json|```/g, '').trim())
   }
 
   try {
@@ -64,7 +39,7 @@ MOVE:
 
 Also extract:
 - propertyType: Type of home
-- location: Area or neighborhood  
+- location: Area or neighborhood
 - oneSentence: One sharp sentence capturing the complete MOVE
 
 Respond ONLY with valid JSON. No explanation. No markdown. Keys: motivation, outcome, veto, exchange, propertyType, location, oneSentence`)
@@ -98,7 +73,6 @@ Respond ONLY with valid JSON. Keys: motivation, outcome, veto, exchange, propert
         isMatch: b.isMatch,
         missingKeys: ['motivation','outcome','veto','exchange'].filter(k => !b.northStar?.[k]),
       }))
-
       const result = await callAI(`You are a real estate coaching expert analyzing an agent's diagnostic patterns.
 
 Agent: ${agentName}
@@ -107,7 +81,7 @@ Buyer data: ${JSON.stringify(summary)}
 Identify:
 1. Which MOVE letter (M, O, V, or E) this agent most consistently leaves incomplete
 2. One specific pattern in their diagnostic approach
-3. One sharp coaching prompt for their manager — specific, actionable, under 25 words
+3. One sharp coaching prompt — specific, actionable, under 25 words
 
 Respond ONLY with valid JSON. Keys: weakestLetter, pattern, coachingPrompt`)
       return res.json({ insights: result })
