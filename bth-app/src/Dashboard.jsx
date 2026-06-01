@@ -42,6 +42,13 @@ const CONFIDENCE_STAGES = [
   { val: 'clear',   label: 'Clear',     sub: 'Strong hypothesis' },
   { val: 'true',    label: 'True MOVE', sub: 'Found it' },
 ]
+// Muted grey → taupe → sage → olive green progression for the MOVE confidence scale
+const STAGE_COLORS = [
+  { base: '#9ca3af', light: '#f3f4f6', border: '#d1d5db' },
+  { base: '#8a9e8a', light: '#f0f4f0', border: '#c5d4c5' },
+  { base: '#6b8c6b', light: '#eaf3ea', border: '#aacbaa' },
+  { base: '#5a7047', light: '#ecf2e6', border: '#a3bc89' },
+]
 
 const MOVE_PROMPTS = {
   motivation: ["What finally made them decide to move now?", "What's not working about where they are today?", "What would happen if they didn't move this year?"],
@@ -816,19 +823,23 @@ function MoveTab({ buyer, patchNS, patch }) {
           {CONFIDENCE_STAGES.map((cs, i) => {
             const active = confStageIdx >= i
             const isCurrent = confStageIdx === i
-            const isTrue = cs.val === 'true'
+            const sc = STAGE_COLORS[i]
             return (
-              <button key={cs.val} style={{ ...s.confStage, ...(isCurrent ? s.confStageCurrent : {}), ...(active && !isCurrent ? s.confStagePast : {}) }}
+              <button key={cs.val} style={{
+                ...s.confStage,
+                ...(isCurrent ? { borderColor: sc.base, background: sc.light, boxShadow: `0 0 0 2px ${sc.border}` } : {}),
+                ...(active && !isCurrent ? { borderColor: sc.border, background: C.bg } : {})
+              }}
                 onClick={() => patch({ confidence: cs.val })}>
-                <div style={{ ...s.confStageNum, ...(active ? { background: isTrue ? C.green : C.gold, color: '#fff', borderColor: isTrue ? C.green : C.gold } : {}) }}>{i + 1}</div>
-                <div style={{ ...s.confStageLabel, ...(isCurrent ? { color: isTrue ? C.green : C.gold, fontWeight: 700 } : {}) }}>{cs.label}</div>
+                <div style={{ ...s.confStageNum, ...(active ? { background: sc.base, color: '#fff', borderColor: sc.base } : {}) }}>{i + 1}</div>
+                <div style={{ ...s.confStageLabel, ...(isCurrent ? { color: sc.base, fontWeight: 700 } : {}) }}>{cs.label}</div>
                 <div style={s.confStageSub}>{cs.sub}</div>
               </button>
             )
           })}
         </div>
         {buyer.confidence && (
-          <div style={{ ...s.confNudge, borderColor: buyer.confidence === 'true' ? C.greenBorder : C.goldBorder, background: buyer.confidence === 'true' ? C.greenLight : C.goldLight }}>
+          <div style={{ ...s.confNudge, borderColor: STAGE_COLORS[confStageIdx].border, background: STAGE_COLORS[confStageIdx].light }}>
             {buyer.confidence === 'fuzzy' && "What's the one thing still unclear? Make that the focus of the next showing."}
             {buyer.confidence === 'forming' && "Getting clearer. Keep testing. What would make you move from Forming to Clear?"}
             {buyer.confidence === 'clear' && "Strong hypothesis. Are you ready to prescribe the right home?"}
