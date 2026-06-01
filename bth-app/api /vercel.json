@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/suggest.js": {
+      "runtime": "@vercel/node@3.0.7"
+    }
+  }
+}
