@@ -89,6 +89,8 @@ function dbToBuyer(r) {
     showings: r.showings || [],
     confidence: r.confidence || '',
     isMatch: r.is_match || false,
+    phone: r.phone || '',
+    email: r.email || '',
     createdAt: r.created_at,
   }
 }
@@ -98,6 +100,7 @@ function buyerToDb(b) {
     client_name: b.clientName || '', agent_name: b.agentName || '', status: b.status || 'Active',
     contacts: b.contacts || [], north_star: b.northStar || {}, showings: b.showings || [],
     confidence: b.confidence || '', is_match: b.isMatch || false,
+    phone: b.phone || '', email: b.email || '',
     updated_at: new Date().toISOString(),
   }
 }
@@ -593,7 +596,33 @@ function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotif, 
 
       <div style={s.buyerHead}>
         <div style={s.buyerNameRow}>
-          <div style={s.buyerName}>{buyer.clientName || 'Unnamed Buyer'}{buyer.contacts?.[1]?.name && <span style={s.buyerSpouse}> & {buyer.contacts[1].name}</span>}</div>
+          <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: 8, marginBottom: 6 }}>
+            <InlineEdit
+              value={buyer.clientName}
+              placeholder="Unnamed Buyer"
+              onSave={v => patch({ clientName: v })}
+              style={s.buyerName}
+              inputStyle={s.buyerNameInput}
+            />
+            {buyer.contacts?.[1]?.name && <span style={s.buyerSpouse}>& {buyer.contacts[1].name}</span>}
+          </div>
+          <div style={s.buyerContactRow}>
+            <InlineEdit
+              value={buyer.phone || ''}
+              placeholder="Add phone"
+              onSave={v => patch({ phone: formatPhone(v) })}
+              style={s.buyerContactField}
+              inputStyle={s.buyerContactInput}
+            />
+            <span style={s.buyerDot}>·</span>
+            <InlineEdit
+              value={buyer.email || ''}
+              placeholder="Add email"
+              onSave={v => patch({ email: v })}
+              style={s.buyerContactField}
+              inputStyle={s.buyerContactInput}
+            />
+          </div>
           <div style={s.buyerMetaRow}>
             <span style={s.buyerAgent}>{buyer.agentName || 'No agent'}</span>
             <span style={s.buyerDot}>·</span>
@@ -1276,6 +1305,31 @@ function UserManagement({ agents, session, onBack, onRefresh }) {
 // ─── SHARED ───────────────────────────────────────────────────────────────────
 function FL({ children }) { return <div style={s.fl}>{children}</div> }
 
+function InlineEdit({ value, placeholder, onSave, style, inputStyle }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(value)
+  const ref = useRef(null)
+
+  useEffect(() => { if (editing) ref.current?.select() }, [editing])
+  useEffect(() => { if (!editing) setDraft(value) }, [value, editing])
+
+  const commit = () => { setEditing(false); if (draft !== value) onSave(draft) }
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit() }
+    if (e.key === 'Escape') { setDraft(value); setEditing(false) }
+  }
+
+  if (editing) {
+    return <input ref={ref} value={draft} onChange={e => setDraft(e.target.value)}
+      onBlur={commit} onKeyDown={onKeyDown} style={inputStyle} />
+  }
+  return (
+    <div onClick={() => setEditing(true)} title="Click to edit" style={{ cursor: 'text', ...style }}>
+      {value || <span style={{ color: C.textMuted, fontWeight: 400 }}>{placeholder}</span>}
+    </div>
+  )
+}
+
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 const s = {
   screen:      { display: 'flex', flexDirection: 'column', height: '100vh', background: C.bg, fontFamily: FONTS.sans, overflow: 'hidden', color: C.text, fontSize: 14 },
@@ -1350,7 +1404,11 @@ const s = {
   buyerHead:    { background: C.surface, borderBottom: `1px solid ${C.border}`, padding: '18px 24px', flexShrink: 0 },
   buyerNameRow: { marginBottom: 6 },
   buyerName:    { fontSize: 22, fontWeight: 700, color: C.text, fontFamily: FONTS.sans },
+  buyerNameInput: { fontSize: 22, fontWeight: 700, color: C.text, fontFamily: FONTS.sans, border: 'none', borderBottom: `2px solid ${C.gold}`, outline: 'none', background: 'transparent', padding: '0 2px', minWidth: 160 },
   buyerSpouse:  { fontSize: 16, color: C.textMid, fontWeight: 400 },
+  buyerContactRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' },
+  buyerContactField: { fontSize: 13, color: C.textMid },
+  buyerContactInput: { fontSize: 13, color: C.textMid, border: 'none', borderBottom: `1px solid ${C.gold}`, outline: 'none', background: 'transparent', padding: '0 2px', minWidth: 140, fontFamily: FONTS.sans },
   buyerMetaRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   buyerAgent:   { fontSize: 13, color: C.textMid },
   buyerDot:     { color: C.border, fontSize: 14 },
