@@ -96,8 +96,6 @@ function dbToBuyer(r) {
     showings: r.showings || [],
     confidence: r.confidence || '',
     isMatch: r.is_match || false,
-    phone: r.phone || '',
-    email: r.email || '',
     createdAt: r.created_at,
   }
 }
@@ -107,7 +105,6 @@ function buyerToDb(b) {
     client_name: b.clientName || '', agent_name: b.agentName || '', status: b.status || 'Active',
     contacts: b.contacts || [], north_star: b.northStar || {}, showings: b.showings || [],
     confidence: b.confidence || '', is_match: b.isMatch || false,
-    phone: b.phone || '', email: b.email || '',
     updated_at: new Date().toISOString(),
   }
 }
@@ -615,17 +612,17 @@ function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotif, 
           </div>
           <div style={s.buyerContactRow}>
             <InlineEdit
-              value={buyer.phone || ''}
+              value={buyer.contacts?.find(c => c.isPrimary)?.phone ?? ''}
               placeholder="Add phone"
-              onSave={v => patch({ phone: formatPhone(v) })}
+              onSave={v => patch({ contacts: buyer.contacts.map(c => c.isPrimary ? { ...c, phone: formatPhone(v) } : c) })}
               style={s.buyerContactField}
               inputStyle={s.buyerContactInput}
             />
             <span style={s.buyerDot}>·</span>
             <InlineEdit
-              value={buyer.email || ''}
+              value={buyer.contacts?.find(c => c.isPrimary)?.email ?? ''}
               placeholder="Add email"
-              onSave={v => patch({ email: v })}
+              onSave={v => patch({ contacts: buyer.contacts.map(c => c.isPrimary ? { ...c, email: v } : c) })}
               style={s.buyerContactField}
               inputStyle={s.buyerContactInput}
             />
