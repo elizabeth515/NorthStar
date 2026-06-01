@@ -862,7 +862,7 @@ function MoveField({ m, value, onChange }) {
         </button>
       </div>
       {active && <div style={s.fieldLive}>{transcript || <span style={{ color: C.textMuted }}>Listening…</span>}</div>}
-      <textarea style={s.moveFieldInput} value={value} placeholder="Type or speak →" rows={2}
+      <textarea style={s.moveFieldInput} value={value} placeholder="Type or speak →"
         onChange={e => onChange(e.target.value)} />
     </div>
   )
@@ -1410,7 +1410,7 @@ const s = {
   moveFieldLetter:{ fontSize: 26, fontWeight: 800, color: C.gold, lineHeight: 1, flexShrink: 0, fontFamily: FONTS.sans },
   moveFieldLabel: { fontSize: 13, fontWeight: 700, color: C.text, fontFamily: FONTS.sans },
   moveFieldQ:     { fontSize: 12, color: C.textMuted, marginTop: 2, lineHeight: 1.4 },
-  moveFieldInput: { width: '100%', boxSizing: 'border-box', padding: '10px 12px', border: `1px solid ${C.border}`, borderRadius: 6, background: C.bg, fontSize: 14, fontFamily: FONTS.sans, color: C.text, outline: 'none', resize: 'vertical', lineHeight: 1.5 },
+  moveFieldInput: { width: '100%', boxSizing: 'border-box', padding: '10px 12px', border: `1px solid ${C.border}`, borderRadius: 6, background: C.bg, fontSize: 14, fontFamily: FONTS.sans, color: C.text, outline: 'none', resize: 'none', lineHeight: 1.5, fieldSizing: 'content', minHeight: '4.5rem', overflowY: 'hidden' },
   fieldLive:      { fontSize: 13, color: C.textMid, fontStyle: 'italic', padding: '6px 8px', background: C.bg, borderRadius: 4, marginBottom: 8, lineHeight: 1.5 },
   micSmall:       { padding: '5px 9px', background: 'none', border: `1px solid ${C.border}`, borderRadius: 5, cursor: 'pointer', fontSize: 14, color: C.textMuted, flexShrink: 0 },
   micSmallActive: { background: C.redLight, borderColor: '#fca5a5', color: C.red },
