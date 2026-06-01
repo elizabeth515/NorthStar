@@ -1,24 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from './supabase'
 
-// ─── DATA ─────────────────────────────────────────────────────────────────────
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
 const DEFAULT_NS = { propertyType: '', location: '', motivation: '', outcome: '', veto: '', exchange: '', oneSentence: '' }
-const DEFAULT_PROFILE = { friction: '', gain: '', nonNegotiables: '', patterns: '' }
 const DEFAULT_CONTACTS = [
   { id: '1', name: '', phone: '', email: '', role: 'Buyer', isPrimary: true },
   { id: '2', name: '', phone: '', email: '', role: 'Spouse / Partner', isPrimary: false },
 ]
 
-const MOVE_KEYS = ['motivation', 'outcome', 'veto', 'exchange']
-const MOVE_LABELS = { motivation: 'M — Motivation', outcome: 'O — Outcome', veto: 'V — Veto', exchange: 'E — Exchange' }
-const MOVE_QUESTIONS = {
-  motivation: "What's driving this move?",
-  outcome: "What does the right home give them?",
-  veto: "What kills a house immediately?",
-  exchange: "What will they trade to get what matters most?",
-}
+const MOVE = [
+  { key: 'motivation', letter: 'M', label: 'Motivation', question: "What's driving this move?" },
+  { key: 'outcome',    letter: 'O', label: 'Outcome',    question: 'What does the right home give them?' },
+  { key: 'veto',       letter: 'V', label: 'Veto',       question: 'What kills a house immediately?' },
+  { key: 'exchange',   letter: 'E', label: 'Exchange',   question: 'What will they trade to get what matters most?' },
+]
 
-const DEBRIEF_FIELDS = [
+const DEBRIEF = [
   { key: 'respondedTo',    label: 'Responded to',    question: 'What created energy?' },
   { key: 'pulledBackFrom', label: 'Pulled back from', question: "What didn't land?" },
   { key: 'moreTrue',       label: 'More true',        question: 'What confirmed the MOVE?' },
@@ -26,7 +23,9 @@ const DEBRIEF_FIELDS = [
   { key: 'hypothesisUpdate', label: 'The shift',      question: 'How does the MOVE change?' },
 ]
 
-const CONSULTATION_PREP = [
+const STATUSES = ['Active', 'Under Contract', 'Closed', 'On Hold']
+
+const PREP_QUESTIONS = [
   "What's not working about where you are now?",
   "What does the right home change for you?",
   "What would make you walk away from a house?",
@@ -34,39 +33,57 @@ const CONSULTATION_PREP = [
   "What would you give up to get that?",
 ]
 
-function dbToBuyer(row) {
+// ─── COLORS — communication only ─────────────────────────────────────────────
+const C = {
+  dark:      '#1c1917',
+  mid:       '#292524',
+  gold:      '#b8962e',
+  goldLight: '#fdf6e3',
+  goldBorder:'#e6d4a0',
+  red:       '#dc2626',
+  redLight:  '#fef2f2',
+  green:     '#16a34a',
+  greenLight:'#f0fdf4',
+  bg:        '#faf7f2',
+  surface:   '#ffffff',
+  border:    '#e8e2d9',
+  text:      '#1c1917',
+  textMid:   '#57534e',
+  textMuted: '#a8a29e',
+  onDark:    '#ffffff',
+  onDarkMid: '#a8a29e',
+  onDarkSub: '#78716c',
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+function dbToBuyer(r) {
   return {
-    id: row.id,
-    clientName: row.client_name || '',
-    agentName: row.agent_name || '',
-    status: row.status || 'Active',
-    contacts: row.contacts?.length ? row.contacts : DEFAULT_CONTACTS.map(c => ({ ...c })),
-    northStar: { ...DEFAULT_NS, ...(row.north_star || {}) },
-    profile: { ...DEFAULT_PROFILE, ...(row.profile || {}) },
-    showings: row.showings || [],
-    confidence: row.confidence || '',
-    isMatch: row.is_match || false,
-    createdAt: row.created_at,
+    id: r.id, clientName: r.client_name || '', agentName: r.agent_name || '',
+    status: r.status || 'Active',
+    contacts: r.contacts?.length ? r.contacts : DEFAULT_CONTACTS.map(c => ({ ...c })),
+    northStar: { ...DEFAULT_NS, ...(r.north_star || {}) },
+    showings: r.showings || [],
+    confidence: r.confidence || '',
+    isMatch: r.is_match || false,
+    createdAt: r.created_at,
   }
 }
 
 function buyerToDb(b) {
   return {
     client_name: b.clientName, agent_name: b.agentName, status: b.status,
-    contacts: b.contacts, north_star: b.northStar,
-    profile: b.profile, showings: b.showings,
-    confidence: b.confidence || '',
-    is_match: b.isMatch || false,
+    contacts: b.contacts, north_star: b.northStar, showings: b.showings,
+    confidence: b.confidence || '', is_match: b.isMatch || false,
     updated_at: new Date().toISOString(),
   }
 }
 
-function newBuyerObj(agentName = '') {
+function newBuyer(agentName = '') {
   return {
     clientName: '', agentName, status: 'Active',
     contacts: DEFAULT_CONTACTS.map(c => ({ ...c })),
-    northStar: { ...DEFAULT_NS }, profile: { ...DEFAULT_PROFILE },
-    showings: [], confidence: '', isMatch: false,
+    northStar: { ...DEFAULT_NS }, showings: [],
+    confidence: '', isMatch: false,
   }
 }
 
@@ -74,14 +91,19 @@ function newShowing(agentName = '') {
   return {
     id: Date.now().toString(),
     date: new Date().toISOString().split('T')[0],
-    address: '', agentName, testingToday: '',
-    respondedTo: '', pulledBackFrom: '',
-    moreTrue: '', lessTrue: '', hypothesisUpdate: '',
+    address: '', agentName, testingToday: '', freeText: '',
+    respondedTo: '', pulledBackFrom: '', moreTrue: '', lessTrue: '', hypothesisUpdate: '',
   }
 }
 
-function nsComplete(ns) {
-  return MOVE_KEYS.filter(k => ns[k]).length
+function moveCount(ns) { return MOVE.filter(m => ns[m.key]).length }
+
+function moveStatus(ns, isMatch) {
+  if (isMatch) return { label: 'Match found', color: C.green }
+  const c = moveCount(ns)
+  if (c === 0) return { label: 'MOVE not started', color: C.red }
+  if (c < 4) return { label: `MOVE building ${c}/4`, color: C.gold }
+  return { label: 'MOVE complete', color: C.text }
 }
 
 function formatPhone(v) {
@@ -91,103 +113,75 @@ function formatPhone(v) {
   return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`
 }
 
-const STATUSES = ['Active', 'Under Contract', 'Closed', 'On Hold']
-const STATUS_COLORS = {
-  'Active':         { bg: '#dcfce7', color: '#14532d', border: '#86efac' },
-  'Under Contract': { bg: '#dbeafe', color: '#1e3a5f', border: '#93c5fd' },
-  'Closed':         { bg: '#f3f4f6', color: '#374151', border: '#d1d5db' },
-  'On Hold':        { bg: '#fef9c3', color: '#713f12', border: '#fde68a' },
-}
-
-const C = {
-  dark: '#1c1917', darkHover: '#292524',
-  gold: '#b8962e', goldLight: '#fdf6e3',
-  bg: '#faf7f2', surface: '#ffffff',
-  border: '#e8e2d9', borderSoft: '#f0ebe3',
-  text: '#1c1917', textMid: '#57534e',
-  textMuted: '#a8a29e',
-  onDark: '#ffffff', onDarkMid: '#a8a29e', onDarkSub: '#78716c',
+function daysSince(dateStr) {
+  if (!dateStr) return null
+  return Math.floor((Date.now() - new Date(dateStr)) / 86400000)
 }
 
 // ─── VOICE HOOK ───────────────────────────────────────────────────────────────
-function useFreeVoice() {
+function useVoice() {
   const [listening, setListening] = useState(false)
   const [transcript, setTranscript] = useState('')
-  const recogRef = useRef(null)
-  const silenceTimer = useRef(null)
-  const latestRef = useRef('')
+  const recog = useRef(null)
+  const timer = useRef(null)
+  const latest = useRef('')
 
   const stop = useCallback(() => {
-    if (silenceTimer.current) { clearTimeout(silenceTimer.current); silenceTimer.current = null }
-    if (recogRef.current) { try { recogRef.current.abort() } catch (_) {} recogRef.current = null }
+    if (timer.current) { clearTimeout(timer.current); timer.current = null }
+    if (recog.current) { try { recog.current.abort() } catch (_) {} recog.current = null }
     setListening(false)
   }, [])
 
   const start = useCallback((onDone) => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition
     if (!SR) { alert('Voice requires Chrome or Safari.'); return }
-    setTranscript(''); latestRef.current = ''
-    setListening(true)
-    const r = new SR()
-    r.continuous = true; r.interimResults = true; r.lang = 'en-US'
-    recogRef.current = r
-    let final = ''
-
+    setTranscript(''); latest.current = ''; setListening(true)
+    const r = new SR(); r.continuous = true; r.interimResults = true; r.lang = 'en-US'
+    recog.current = r; let final = ''
     r.onresult = (e) => {
       let interim = ''
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const t = e.results[i][0].transcript
-        if (e.results[i].isFinal) final += t
-        else interim = t
+        if (e.results[i].isFinal) final += t; else interim = t
       }
       const full = (final + interim).trim()
-      latestRef.current = full
-      setTranscript(full)
-      if (silenceTimer.current) clearTimeout(silenceTimer.current)
-      silenceTimer.current = setTimeout(() => {
-        stop()
-        onDone(latestRef.current)
-      }, 5000)
+      latest.current = full; setTranscript(full)
+      if (timer.current) clearTimeout(timer.current)
+      timer.current = setTimeout(() => { stop(); onDone(latest.current) }, 5000)
     }
-
-    r.onerror = (e) => { if (e.error !== 'aborted') { stop(); onDone(latestRef.current) } }
+    r.onerror = (e) => { if (e.error !== 'aborted') { stop(); onDone(latest.current) } }
     r.onend = () => setListening(false)
     r.start()
   }, [stop])
 
-  const stopAndReturn = useCallback((onDone) => {
-    stop()
-    onDone(latestRef.current)
-  }, [stop])
+  const finish = useCallback((onDone) => { stop(); onDone(latest.current) }, [stop])
 
-  return { start, stop, stopAndReturn, listening, transcript }
+  return { start, stop, finish, listening, transcript }
 }
 
 // ─── APP ─────────────────────────────────────────────────────────────────────
-export default function Dashboard({ session }) {
+export default function App({ session }) {
   const [buyers, setBuyers] = useState([])
   const [agents, setAgents] = useState([])
+  const [currentAgent, setCurrentAgent] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
-  const [view, setView] = useState('snapshot')
+  const [view, setView] = useState('snapshot') // snapshot | buyer | showing | manager | performance
   const [tab, setTab] = useState('move')
   const [search, setSearch] = useState('')
   const [agentFilter, setAgentFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState('all')
   const [showingDraft, setShowingDraft] = useState(null)
   const [editingShowingId, setEditingShowingId] = useState(null)
-  const [aiNotification, setAiNotification] = useState(null)
+  const [aiNotif, setAiNotif] = useState(null)
   const [aiLoading, setAiLoading] = useState(false)
-  const [mindsetOpen, setMindsetOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const saveTimers = useRef({})
+  const isAdmin = currentAgent?.role === 'admin'
 
   useEffect(() => {
     loadData()
-    const channel = supabase.channel('buyers-rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'buyers' }, handleRT)
-      .subscribe()
-    return () => supabase.removeChannel(channel)
+    supabase.channel('rt').on('postgres_changes', { event: '*', schema: 'public', table: 'buyers' }, handleRT).subscribe()
   }, [])
 
   const loadData = async () => {
@@ -198,6 +192,8 @@ export default function Dashboard({ session }) {
     ])
     setBuyers((bRows || []).map(dbToBuyer))
     setAgents(aRows || [])
+    const me = (aRows || []).find(a => a.id === session.user.id)
+    setCurrentAgent(me || null)
     setLoading(false)
   }
 
@@ -207,7 +203,7 @@ export default function Dashboard({ session }) {
     else if (p.eventType === 'DELETE') setBuyers(prev => prev.filter(b => b.id !== p.old.id))
   }
 
-  const debouncedSave = useCallback((buyer) => {
+  const save = useCallback((buyer) => {
     if (saveTimers.current[buyer.id]) clearTimeout(saveTimers.current[buyer.id])
     setSaving(true)
     saveTimers.current[buyer.id] = setTimeout(async () => {
@@ -218,214 +214,128 @@ export default function Dashboard({ session }) {
     }, 800)
   }, [])
 
+  const patch = useCallback((patch) => {
+    setBuyers(p => p.map(b => { if (b.id !== selectedId) return b; const nb = { ...b, ...patch }; save(nb); return nb }))
+  }, [selectedId, save])
+
+  const patchNS = useCallback((nsPatch) => {
+    setBuyers(p => p.map(b => { if (b.id !== selectedId) return b; const nb = { ...b, northStar: { ...b.northStar, ...nsPatch } }; save(nb); return nb }))
+  }, [selectedId, save])
+
   const addBuyer = async () => {
-    const agentName = agents.find(a => a.id === session.user.id)?.name || ''
-    const { data, error } = await supabase.from('buyers').insert(buyerToDb(newBuyerObj(agentName))).select().single()
-    if (!error && data) {
-      const b = dbToBuyer(data)
-      setBuyers(p => [b, ...p])
-      setSelectedId(b.id)
-      setTab('move')
-      setView('buyer')
-    }
+    const agentName = currentAgent?.name || ''
+    const { data, error } = await supabase.from('buyers').insert(buyerToDb(newBuyer(agentName))).select().single()
+    if (!error && data) { const b = dbToBuyer(data); setBuyers(p => [b, ...p]); setSelectedId(b.id); setTab('move'); setView('buyer') }
   }
 
-  const updateBuyer = useCallback((patch) => {
-    setBuyers(p => p.map(b => {
-      if (b.id !== selectedId) return b
-      const nb = { ...b, ...patch }
-      debouncedSave(nb)
-      return nb
-    }))
-  }, [selectedId, debouncedSave])
-
-  const updateNS = useCallback((patch) => {
-    setBuyers(p => p.map(b => {
-      if (b.id !== selectedId) return b
-      const nb = { ...b, northStar: { ...b.northStar, ...patch } }
-      debouncedSave(nb)
-      return nb
-    }))
-  }, [selectedId, debouncedSave])
-
   const saveShowing = useCallback(async (showing) => {
-    let updatedBuyer = null
+    let updated = null
     setBuyers(p => p.map(b => {
       if (b.id !== selectedId) return b
       const exists = b.showings.find(s => s.id === showing.id)
       const showings = exists ? b.showings.map(s => s.id === showing.id ? showing : s) : [...b.showings, showing]
-      const nb = { ...b, showings }
-      debouncedSave(nb)
-      updatedBuyer = nb
-      return nb
+      const nb = { ...b, showings }; save(nb); updated = nb; return nb
     }))
-    setShowingDraft(null)
-    setEditingShowingId(null)
-    setView('buyer')
-    setTab('showings')
+    setShowingDraft(null); setEditingShowingId(null); setView('buyer'); setTab('showings')
 
-    // AI debrief
-    const hasContent = showing.respondedTo || showing.pulledBackFrom || showing.moreTrue || showing.lessTrue || showing.hypothesisUpdate
-    if (updatedBuyer && hasContent) {
+    const hasContent = showing.freeText || showing.respondedTo || showing.hypothesisUpdate
+    if (updated && hasContent) {
       setAiLoading(true)
       try {
         const res = await fetch('/api/suggest', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'debrief', northStar: updatedBuyer.northStar, showing }),
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'debrief', northStar: updated.northStar, showing }),
         })
         const data = await res.json()
         if (data.result) {
-          const { coachingQuestion, oneSentence, ...nsUpdates } = data.result
-          const prevNS = { ...updatedBuyer.northStar }
-          const changed = Object.keys(nsUpdates).filter(k => nsUpdates[k] && nsUpdates[k] !== prevNS[k])
+          const { coachingQuestion, oneSentence, ...nsU } = data.result
+          const prev = { ...updated.northStar }
+          const changed = Object.keys(nsU).filter(k => nsU[k] && nsU[k] !== prev[k])
           if (changed.length > 0 || oneSentence) {
             setBuyers(p => p.map(b => {
               if (b.id !== selectedId) return b
-              const nb = { ...b, northStar: { ...b.northStar, ...nsUpdates, oneSentence: oneSentence || b.northStar.oneSentence } }
-              debouncedSave(nb)
-              return nb
+              const nb = { ...b, northStar: { ...b.northStar, ...nsU, ...(oneSentence ? { oneSentence } : {}) } }
+              save(nb); return nb
             }))
-            setAiNotification({ applied: nsUpdates, previous: prevNS, count: changed.length, coachingQuestion, oneSentence })
+            setAiNotif({ applied: nsU, previous: prev, changed, coachingQuestion, oneSentence })
           } else if (coachingQuestion) {
-            setAiNotification({ applied: {}, previous: prevNS, count: 0, coachingQuestion, oneSentence })
+            setAiNotif({ applied: {}, previous: prev, changed: [], coachingQuestion, oneSentence })
           }
         }
       } catch (_) {}
       setAiLoading(false)
     }
-  }, [selectedId, debouncedSave])
-
-  const undoAI = useCallback((prevNS) => {
-    setBuyers(p => p.map(b => {
-      if (b.id !== selectedId) return b
-      const nb = { ...b, northStar: prevNS }
-      debouncedSave(nb)
-      return nb
-    }))
-    setAiNotification(null)
-  }, [selectedId, debouncedSave])
-
-  const deleteShowing = useCallback((sid) => {
-    setBuyers(p => p.map(b => {
-      if (b.id !== selectedId) return b
-      const nb = { ...b, showings: b.showings.filter(s => s.id !== sid) }
-      debouncedSave(nb)
-      return nb
-    }))
-  }, [selectedId, debouncedSave])
+  }, [selectedId, save])
 
   const deleteBuyer = async (id) => {
     if (!window.confirm('Delete this buyer?')) return
     await supabase.from('buyers').delete().eq('id', id)
-    setBuyers(p => p.filter(b => b.id !== id))
-    setView('snapshot')
-    setSelectedId(null)
+    setBuyers(p => p.filter(b => b.id !== id)); setView('snapshot'); setSelectedId(null)
   }
 
-  const openShowing = (showing = null) => {
-    const agentName = agents.find(a => a.id === session.user.id)?.name || ''
-    if (showing) { setShowingDraft({ ...showing }); setEditingShowingId(showing.id) }
+  const deleteShowing = useCallback((sid) => {
+    setBuyers(p => p.map(b => { if (b.id !== selectedId) return b; const nb = { ...b, showings: b.showings.filter(s => s.id !== sid) }; save(nb); return nb }))
+  }, [selectedId, save])
+
+  const openShowing = (sh = null) => {
+    const agentName = currentAgent?.name || ''
+    if (sh) { setShowingDraft({ ...sh }); setEditingShowingId(sh.id) }
     else { setShowingDraft(newShowing(agentName)); setEditingShowingId(null) }
-    setView('showing')
-    setAiNotification(null)
-  }
-
-  const selectBuyer = (id) => {
-    setSelectedId(id); setTab('move'); setView('buyer'); setAiNotification(null)
+    setView('showing'); setAiNotif(null)
   }
 
   const selected = buyers.find(b => b.id === selectedId)
-  const currentAgent = agents.find(a => a.id === session.user.id)
 
   const filtered = buyers.filter(b => {
     const q = search.toLowerCase()
-    const matchSearch = !q || b.clientName.toLowerCase().includes(q) || b.agentName.toLowerCase().includes(q)
-    const matchAgent = agentFilter === 'all' || b.agentName === agentFilter
-    const matchStatus = statusFilter === 'all' || b.status === statusFilter
-    return matchSearch && matchAgent && matchStatus
+    return (!q || b.clientName.toLowerCase().includes(q) || b.agentName.toLowerCase().includes(q))
+      && (agentFilter === 'all' || b.agentName === agentFilter)
+      && (statusFilter === 'all' || b.status === statusFilter)
   })
 
-  if (loading) return <div style={s.loadingScreen}>Loading…</div>
+  if (loading) return <div style={s.center}>Loading…</div>
 
-  if (view === 'showing' && showingDraft) {
-    return <ShowingForm draft={showingDraft} setDraft={setShowingDraft} onSave={saveShowing}
-      onCancel={() => { setView('buyer'); setShowingDraft(null) }}
-      isEdit={!!editingShowingId} buyer={selected} />
-  }
+  if (view === 'showing' && showingDraft)
+    return <ShowingForm draft={showingDraft} setDraft={setShowingDraft} buyer={selected}
+      onSave={saveShowing} onCancel={() => { setView('buyer'); setShowingDraft(null) }} isEdit={!!editingShowingId} />
 
-  if (view === 'buyer' && selected) {
+  if (view === 'buyer' && selected)
     return <BuyerView buyer={selected} agents={agents} currentAgent={currentAgent} saving={saving}
-      tab={tab} setTab={setTab} aiNotification={aiNotification} aiLoading={aiLoading}
-      setAiNotification={setAiNotification} undoAI={undoAI}
-      updateBuyer={updateBuyer} updateNS={updateNS}
-      saveShowing={saveShowing} deleteShowing={deleteShowing} deleteBuyer={deleteBuyer}
-      openShowing={openShowing} onBack={() => setView('snapshot')} />
-  }
+      tab={tab} setTab={setTab} aiNotif={aiNotif} aiLoading={aiLoading} setAiNotif={setAiNotif}
+      patch={patch} patchNS={patchNS} saveShowing={saveShowing} deleteShowing={deleteShowing}
+      deleteBuyer={deleteBuyer} openShowing={openShowing} onBack={() => setView('snapshot')}
+      undoAI={(prev) => { patchNS(prev); setAiNotif(null) }} />
+
+  if (view === 'manager' && isAdmin)
+    return <ManagerView buyers={buyers} agents={agents} onBack={() => setView('snapshot')} onSelect={(id) => { setSelectedId(id); setView('buyer'); setTab('move') }} />
+
+  if (view === 'performance')
+    return <PerformanceView buyers={buyers} agentName={currentAgent?.name || ''} onBack={() => setView('snapshot')} />
 
   // ── SNAPSHOT ──
   return (
     <div style={s.screen}>
-      <div style={s.topBar}>
-        <div style={s.topBarLeft}>
-          <div style={s.brand}>BUILD THE HOUSE</div>
-          <div style={s.brandSub}>Powered by MOVE</div>
-        </div>
-        <div style={s.topBarRight}>
-          <span style={s.agentLabel}>{currentAgent?.name || session.user.email}</span>
-          <button style={s.mindsetBtn} onClick={() => setMindsetOpen(o => !o)}>{mindsetOpen ? 'Close' : 'Mindset'}</button>
-          <button style={s.addBuyerBtn} onClick={addBuyer}>+ New Buyer</button>
-          <button style={s.signOutBtn} onClick={() => supabase.auth.signOut()}>Sign out</button>
-        </div>
-      </div>
-
-      {mindsetOpen && (
-        <div style={s.mindsetBar}>
-          <div style={s.mindsetSection}>
-            <div style={s.mindsetSectionTitle}>THE FRAME</div>
-            <div style={s.mindsetText}>You are not searching for a house. You are diagnosing a buyer. The MOVE is the diagnosis. Showings are the tests. The match is the prescription.</div>
-          </div>
-          <div style={s.mindsetSection}>
-            <div style={s.mindsetSectionTitle}>MOVE</div>
-            {MOVE_KEYS.map(k => (
-              <div key={k} style={s.mindsetMoveItem}>
-                <span style={s.mindsetMoveLetter}>{k[0].toUpperCase()}</span>
-                <span style={s.mindsetMoveText}>{MOVE_QUESTIONS[k]}</span>
-              </div>
-            ))}
-          </div>
-          <div style={s.mindsetSection}>
-            <div style={s.mindsetSectionTitle}>BEFORE THE CONSULTATION</div>
-            {CONSULTATION_PREP.map((q, i) => (
-              <div key={i} style={s.mindsetPrepItem}><span style={s.mindsetPrepNum}>{i+1}</span><span style={s.mindsetText}>{q}</span></div>
-            ))}
-          </div>
-          <div style={s.mindsetSection}>
-            <div style={s.mindsetSectionTitle}>TWO ANCHORS</div>
-            <div style={s.mindsetText}><strong style={{ color: C.gold }}>Destroy Ambiguity.</strong> Every conversation should create clarity. If the picture is still fuzzy, keep digging.</div>
-            <div style={{ ...s.mindsetText, marginTop: 8 }}><strong style={{ color: C.gold }}>Find the Best Answer.</strong> You are not hired to collect answers. You are hired to find the best one.</div>
-          </div>
-        </div>
-      )}
+      <TopBar currentAgent={currentAgent} isAdmin={isAdmin}
+        onAdd={addBuyer} onSignOut={() => supabase.auth.signOut()}
+        onManager={() => setView('manager')} onPerformance={() => setView('performance')} />
 
       <div style={s.filterBar}>
-        <input style={s.searchInput} placeholder="Search buyers…" value={search} onChange={e => setSearch(e.target.value)} />
-        <div style={s.filterDivider} />
-        <span style={s.filterLabel}>AGENT</span>
-        <select style={s.filterSelect} value={agentFilter} onChange={e => setAgentFilter(e.target.value)}>
-          <option value="all">All Agents</option>
+        <input style={s.search} placeholder="Search buyers…" value={search} onChange={e => setSearch(e.target.value)} />
+        <div style={s.pipe} />
+        <select style={s.select} value={agentFilter} onChange={e => setAgentFilter(e.target.value)}>
+          <option value="all">All agents</option>
           {agents.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
         </select>
-        <div style={s.filterDivider} />
-        <span style={s.filterLabel}>STATUS</span>
+        <div style={s.pipe} />
         <div style={s.chips}>
           {['all', ...STATUSES].map(st => (
-            <button key={st} style={{ ...s.chip, ...(statusFilter === st ? s.chipActive : {}) }} onClick={() => setStatusFilter(st)}>
+            <button key={st} style={{ ...s.chip, ...(statusFilter === st ? s.chipOn : {}) }}
+              onClick={() => setStatusFilter(st)}>
               {st === 'all' ? 'All' : st === 'Under Contract' ? 'Contract' : st}
             </button>
           ))}
         </div>
-        <span style={s.buyerCount}>{filtered.length} buyer{filtered.length !== 1 ? 's' : ''}</span>
+        <span style={s.count}>{filtered.length} buyer{filtered.length !== 1 ? 's' : ''}</span>
       </div>
 
       <div style={s.grid}>
@@ -433,12 +343,12 @@ export default function Dashboard({ session }) {
           <div style={s.emptyGrid}>
             <div style={s.emptyTitle}>No buyers yet</div>
             <div style={s.emptySub}>Add your first buyer to start building their MOVE.</div>
-            <button style={s.primaryBtn} onClick={addBuyer}>+ Add Buyer</button>
+            <button style={s.btn} onClick={addBuyer}>+ Add Buyer</button>
           </div>
         )}
         {filtered.map(b => (
-          <SnapshotCard key={b.id} buyer={b}
-            onOpen={() => selectBuyer(b.id)}
+          <BuyerCard key={b.id} buyer={b}
+            onOpen={() => { setSelectedId(b.id); setTab('move'); setView('buyer'); setAiNotif(null) }}
             onLog={() => { setSelectedId(b.id); openShowing() }} />
         ))}
       </div>
@@ -446,62 +356,86 @@ export default function Dashboard({ session }) {
   )
 }
 
-// ─── SNAPSHOT CARD ────────────────────────────────────────────────────────────
-function SnapshotCard({ buyer, onOpen, onLog }) {
-  const badge = STATUS_COLORS[buyer.status] || STATUS_COLORS['Active']
-  const count = nsComplete(buyer.northStar)
-  const fuzzy = count < 2
+// ─── TOP BAR ──────────────────────────────────────────────────────────────────
+function TopBar({ currentAgent, isAdmin, onAdd, onSignOut, onManager, onPerformance }) {
+  const [mindset, setMindset] = useState(false)
+  return (
+    <>
+      <div style={s.topBar}>
+        <div>
+          <div style={s.brand}>BUILD THE HOUSE</div>
+          <div style={s.brandSub}>Powered by MOVE</div>
+        </div>
+        <div style={s.topRight}>
+          <span style={s.agentName}>{currentAgent?.name || ''}</span>
+          <button style={s.topBtn} onClick={() => setMindset(o => !o)}>Mindset</button>
+          {isAdmin && <button style={s.topBtn} onClick={onManager}>Manager</button>}
+          <button style={s.topBtn} onClick={onPerformance}>My Stats</button>
+          <button style={s.topBtnGold} onClick={onAdd}>+ New Buyer</button>
+          <button style={s.topBtnGhost} onClick={onSignOut}>Sign out</button>
+        </div>
+      </div>
+      {mindset && <MindsetBar />}
+    </>
+  )
+}
+
+function MindsetBar() {
+  return (
+    <div style={s.mindsetBar}>
+      <div style={s.mindsetBlock}>
+        <div style={s.mindsetHead}>THE FRAME</div>
+        <div style={s.mindsetText}>You are not searching for a house. You are diagnosing a buyer. The MOVE is the diagnosis. Showings are the tests. The match is the prescription.</div>
+      </div>
+      <div style={s.mindsetBlock}>
+        <div style={s.mindsetHead}>MOVE</div>
+        {MOVE.map(m => <div key={m.key} style={s.mindsetRow}><span style={s.mindsetLetter}>{m.letter}</span><span style={s.mindsetText}>{m.question}</span></div>)}
+      </div>
+      <div style={s.mindsetBlock}>
+        <div style={s.mindsetHead}>BEFORE THE CONSULTATION</div>
+        {PREP_QUESTIONS.map((q, i) => <div key={i} style={s.mindsetRow}><span style={s.mindsetNum}>{i+1}</span><span style={s.mindsetText}>{q}</span></div>)}
+      </div>
+      <div style={s.mindsetBlock}>
+        <div style={s.mindsetHead}>TWO ANCHORS</div>
+        <div style={s.mindsetText}><strong style={{ color: C.gold }}>Destroy Ambiguity.</strong> Every conversation should create clarity. If the picture is still fuzzy, keep digging.</div>
+        <div style={{ ...s.mindsetText, marginTop: 6 }}><strong style={{ color: C.gold }}>Find the Best Answer.</strong> You are hired to find the best answer — not collect them.</div>
+      </div>
+    </div>
+  )
+}
+
+// ─── BUYER CARD ───────────────────────────────────────────────────────────────
+function BuyerCard({ buyer, onOpen, onLog }) {
+  const ms = moveStatus(buyer.northStar, buyer.isMatch)
   const lastShowing = [...buyer.showings].sort((a, b) => new Date(b.date) - new Date(a.date))[0]
+  const days = lastShowing ? daysSince(lastShowing.date) : null
+  const urgent = !buyer.isMatch && moveCount(buyer.northStar) === 0
 
   return (
-    <div style={{ ...s.card, ...(fuzzy && !buyer.isMatch ? s.cardFuzzy : {}), ...(buyer.isMatch ? s.cardMatch : {}) }}>
+    <div style={{ ...s.card, ...(buyer.isMatch ? s.cardMatch : urgent ? s.cardUrgent : {}) }}>
       <div style={s.cardTop}>
-        <div style={s.cardTopLeft}>
+        <div>
           <div style={s.cardName}>{buyer.clientName || 'Unnamed Buyer'}</div>
           {buyer.contacts?.[1]?.name && <div style={s.cardSpouse}>& {buyer.contacts[1].name}</div>}
-          <div style={s.cardAgent}>{buyer.agentName || 'No agent'}</div>
+          <div style={s.cardAgent}>{buyer.agentName || 'No agent'} · {buyer.status}</div>
         </div>
-        <span style={{ ...s.statusBadge, background: badge.bg, color: badge.color, border: `1px solid ${badge.border}` }}>
-          {buyer.status}
-        </span>
       </div>
-
       <div style={s.cardBody}>
-        {buyer.isMatch ? (
-          <div style={s.cardMatchBadge}>✓ MOVE FOUND</div>
-        ) : (
-          <div style={s.cardConfidence}>
-            {count === 0 ? <span style={s.cardFuzzyText}>MOVE not started</span>
-              : count < 4 ? <span style={s.cardBuildingText}>MOVE building — {count}/4</span>
-              : <span style={s.cardSharpText}>MOVE complete</span>}
-          </div>
-        )}
-
-        {buyer.northStar.oneSentence ? (
-          <div style={s.cardSentence}>{buyer.northStar.oneSentence}</div>
-        ) : buyer.northStar.motivation ? (
-          <div style={s.cardSentence}>{buyer.northStar.motivation}{buyer.northStar.outcome ? ` · ${buyer.northStar.outcome}` : ''}</div>
-        ) : (
-          <div style={s.cardSentenceEmpty}>No diagnosis yet. Start the MOVE.</div>
-        )}
-
+        <div style={{ ...s.cardStatus, color: ms.color }}>{ms.label}</div>
+        {buyer.northStar.oneSentence
+          ? <div style={s.cardSentence}>{buyer.northStar.oneSentence}</div>
+          : buyer.northStar.motivation
+          ? <div style={s.cardSentence}>{buyer.northStar.motivation}{buyer.northStar.outcome ? ` · ${buyer.northStar.outcome}` : ''}</div>
+          : <div style={s.cardEmpty}>No diagnosis yet.</div>}
         {lastShowing?.hypothesisUpdate && (
-          <div style={s.cardLastUpdate}>
-            <span style={s.cardLastUpdateLabel}>Last shift: </span>
-            {lastShowing.hypothesisUpdate}
-          </div>
+          <div style={s.cardShift}><span style={s.cardShiftLabel}>Last shift: </span>{lastShowing.hypothesisUpdate}</div>
         )}
       </div>
-
-      <div style={s.cardFooter}>
-        <span style={s.cardStat}>{buyer.showings.length} showing{buyer.showings.length !== 1 ? 's' : ''}</span>
+      <div style={s.cardFoot}>
+        <span style={s.cardMeta}>{buyer.showings.length} showing{buyer.showings.length !== 1 ? 's' : ''}{days !== null ? ` · ${days}d ago` : ''}</span>
         <div style={s.cardActions}>
-          {!buyer.isMatch && (
-            <button style={s.cardLogBtn} onClick={e => { e.stopPropagation(); onLog() }}>+ Log Showing</button>
-          )}
-          <button style={s.cardOpenBtn} onClick={onOpen}>
-            {count === 0 ? 'Start MOVE →' : buyer.isMatch ? 'View →' : 'Open →'}
-          </button>
+          {!buyer.isMatch && <button style={s.cardLog} onClick={e => { e.stopPropagation(); onLog() }}>+ Log Showing</button>}
+          <button style={s.cardOpen} onClick={onOpen}>{buyer.isMatch ? 'View →' : moveCount(buyer.northStar) === 0 ? 'Start MOVE →' : 'Open →'}</button>
         </div>
       </div>
     </div>
@@ -509,55 +443,41 @@ function SnapshotCard({ buyer, onOpen, onLog }) {
 }
 
 // ─── BUYER VIEW ───────────────────────────────────────────────────────────────
-function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotification, aiLoading, setAiNotification, undoAI, updateBuyer, updateNS, saveShowing, deleteShowing, deleteBuyer, openShowing, onBack }) {
-  const badge = STATUS_COLORS[buyer.status] || STATUS_COLORS['Active']
+function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotif, aiLoading, setAiNotif, patch, patchNS, saveShowing, deleteShowing, deleteBuyer, openShowing, onBack, undoAI }) {
   return (
     <div style={s.buyerScreen}>
-      <div style={s.buyerTopBar}>
-        <button style={s.backBtn} onClick={onBack}>← All Buyers</button>
-        <div style={s.buyerTopRight}>
-          {!buyer.isMatch && <button style={s.logShowingBtn} onClick={() => openShowing()}>+ Log Showing</button>}
+      <div style={s.buyerBar}>
+        <button style={s.back} onClick={onBack}>← Buyers</button>
+        <div style={s.buyerBarRight}>
+          {!buyer.isMatch && <button style={s.btnGold} onClick={() => openShowing()}>+ Log Showing</button>}
           {!buyer.isMatch
-            ? <button style={s.markMatchBtn} onClick={() => updateBuyer({ isMatch: true, status: 'Under Contract' })}>✓ Found their MOVE</button>
-            : <button style={s.unmatchBtn} onClick={() => updateBuyer({ isMatch: false })}>Unmark</button>}
-          <select style={s.statusSelectDark} value={buyer.status} onChange={e => updateBuyer({ status: e.target.value })}>
+            ? <button style={s.btnOutline} onClick={() => patch({ isMatch: true, status: 'Under Contract' })}>✓ Found their MOVE</button>
+            : <button style={s.btnGhost} onClick={() => patch({ isMatch: false })}>Unmark</button>}
+          <select style={s.statusSel} value={buyer.status} onChange={e => patch({ status: e.target.value })}>
             {STATUSES.map(st => <option key={st}>{st}</option>)}
           </select>
-          <button style={s.deleteBtnDark} onClick={() => deleteBuyer(buyer.id)}>Delete</button>
+          <button style={s.btnDanger} onClick={() => deleteBuyer(buyer.id)}>Delete</button>
         </div>
       </div>
 
-      <div style={s.buyerHeader}>
-        <div>
-          <div style={s.buyerName}>{buyer.clientName || 'Unnamed Buyer'}{buyer.contacts?.[1]?.name && <span style={s.buyerSpouse}> & {buyer.contacts[1].name}</span>}</div>
-          <div style={s.buyerMeta}>
-            {buyer.agentName || 'No agent'}
-            <span style={s.metaDot}>·</span>
-            <span style={{ ...s.statusPill, background: badge.bg, color: badge.color, border: `1px solid ${badge.border}` }}>{buyer.status}</span>
-            <span style={s.metaDot}>·</span>
-            <span style={{ color: saving ? '#d97706' : C.gold }}>{saving ? 'Saving…' : 'Saved'}</span>
-          </div>
-        </div>
-        {buyer.northStar.oneSentence && (
-          <div style={s.oneSentenceHeader}>{buyer.northStar.oneSentence}</div>
-        )}
+      <div style={s.buyerHead}>
+        <div style={s.buyerName}>{buyer.clientName || 'Unnamed Buyer'}{buyer.contacts?.[1]?.name && <span style={s.buyerSpouse}> & {buyer.contacts[1].name}</span>}</div>
+        <div style={s.buyerMeta}>{buyer.agentName || 'No agent'} · {buyer.status} · <span style={{ color: saving ? C.gold : C.textMuted }}>{saving ? 'Saving…' : 'Saved'}</span></div>
+        {buyer.northStar.oneSentence && <div style={s.buyerSentence}>{buyer.northStar.oneSentence}</div>}
       </div>
 
-      {aiLoading && <div style={s.aiLoadBar}><span style={s.aiLoadText}>✦ Analyzing showing — updating the MOVE…</span></div>}
+      {aiLoading && <div style={s.aiLoad}>✦ Analyzing showing — updating the MOVE…</div>}
+      {aiNotif && <AiNotif notif={aiNotif} onUndo={undoAI} onDismiss={() => setAiNotif(null)} />}
 
-      {aiNotification && (
-        <AiPanel notification={aiNotification} onUndo={() => undoAI(aiNotification.previous)} onDismiss={() => setAiNotification(null)} />
-      )}
-
-      <div style={s.tabBar}>
+      <div style={s.tabs}>
         {[['move','The MOVE'],['contacts','Contacts'],['showings',`Showings (${buyer.showings.length})`],['refinements','Refinements']].map(([k,l]) => (
-          <button key={k} style={{ ...s.tab, ...(tab === k ? s.tabActive : {}) }} onClick={() => setTab(k)}>{l}</button>
+          <button key={k} style={{ ...s.tab, ...(tab === k ? s.tabOn : {}) }} onClick={() => setTab(k)}>{l}</button>
         ))}
       </div>
 
-      <div style={s.tabContent}>
-        {tab === 'move'        && <MoveTab buyer={buyer} updateNS={updateNS} updateBuyer={updateBuyer} agents={agents} />}
-        {tab === 'contacts'    && <ContactsTab buyer={buyer} updateBuyer={updateBuyer} agents={agents} />}
+      <div style={s.tabBody}>
+        {tab === 'move'        && <MoveTab buyer={buyer} patchNS={patchNS} patch={patch} />}
+        {tab === 'contacts'    && <ContactsTab buyer={buyer} patch={patch} agents={agents} />}
         {tab === 'showings'    && <ShowingsTab buyer={buyer} openShowing={openShowing} deleteShowing={deleteShowing} />}
         {tab === 'refinements' && <RefinementsTab buyer={buyer} />}
       </div>
@@ -565,215 +485,160 @@ function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotific
   )
 }
 
-// ─── AI PANEL ─────────────────────────────────────────────────────────────────
-function AiPanel({ notification, onUndo, onDismiss }) {
-  const { applied, previous, count, coachingQuestion, oneSentence } = notification
-  const changed = Object.keys(applied || {}).filter(k => applied[k] && applied[k] !== previous[k])
-
+// ─── AI NOTIFICATION ──────────────────────────────────────────────────────────
+function AiNotif({ notif, onUndo, onDismiss }) {
+  const { applied, previous, changed, coachingQuestion, oneSentence } = notif
   return (
     <div style={s.aiPanel}>
-      <div style={s.aiPanelTop}>
-        <span style={s.aiPanelTitle}>✦ MOVE updated from showing</span>
+      <div style={s.aiTop}>
+        <span style={s.aiTitle}>✦ MOVE updated from showing</span>
         <div style={{ display: 'flex', gap: 10 }}>
-          {count > 0 && <button style={s.aiUndoBtn} onClick={onUndo}>Undo</button>}
-          <button style={s.aiDismissBtn} onClick={onDismiss}>✕</button>
+          {changed?.length > 0 && <button style={s.aiUndo} onClick={onUndo}>Undo</button>}
+          <button style={s.aiX} onClick={onDismiss}>✕</button>
         </div>
       </div>
-
-      {oneSentence && (
-        <div style={s.aiSentence}>{oneSentence}</div>
-      )}
-
-      {changed.length > 0 && (
+      {oneSentence && <div style={s.aiSentence}>{oneSentence}</div>}
+      {changed?.length > 0 && (
         <div style={s.aiChanges}>
           {changed.map(k => (
             <div key={k} style={s.aiChange}>
-              <span style={s.aiChangeField}>{MOVE_LABELS[k] || k}</span>
-              <span style={s.aiChangePrev}>{previous[k] || <em style={{ color: C.textMuted }}>was empty</em>}</span>
-              <span style={s.aiChangeArrow}>→</span>
-              <span style={s.aiChangeNext}>{applied[k]}</span>
+              <span style={s.aiKey}>{MOVE.find(m => m.key === k)?.label || k}</span>
+              <span style={s.aiOld}>{previous[k] || '—'}</span>
+              <span style={s.aiArrow}>→</span>
+              <span style={s.aiNew}>{applied[k]}</span>
             </div>
           ))}
         </div>
       )}
-
-      {coachingQuestion && (
-        <div style={s.coachingQ}>
-          <span style={s.coachingQLabel}>Next question to answer: </span>
-          {coachingQuestion}
-        </div>
-      )}
+      {coachingQuestion && <div style={s.aiCoach}><span style={s.aiCoachLabel}>Next: </span>{coachingQuestion}</div>}
     </div>
   )
 }
 
 // ─── MOVE TAB ─────────────────────────────────────────────────────────────────
-function MoveTab({ buyer, updateNS, updateBuyer, agents }) {
+function MoveTab({ buyer, patchNS, patch }) {
   const ns = buyer.northStar
-  const count = nsComplete(ns)
-  const [intakeOpen, setIntakeOpen] = useState(count === 0)
-  const { start, stopAndReturn, listening, transcript } = useFreeVoice()
-  const [intakeListening, setIntakeListening] = useState(false)
-  const [intakeTranscript, setIntakeTranscript] = useState('')
-  const [intakeProcessing, setIntakeProcessing] = useState(false)
+  const count = moveCount(ns)
+  const [intakeOpen, setIntakeOpen] = useState(false)
+  const { start, finish, listening, transcript } = useVoice()
+  const [processing, setProcessing] = useState(false)
+  const [rawText, setRawText] = useState('')
+  const [phase, setPhase] = useState('idle') // idle | listening | review | processing
 
-  const runIntake = () => {
-    setIntakeListening(true)
-    setIntakeTranscript('')
-    start((text) => {
-      setIntakeListening(false)
-      setIntakeTranscript(text)
-    })
+  const runVoice = () => {
+    setPhase('listening'); setRawText('')
+    start((text) => { setRawText(text); setPhase('review') })
   }
 
-  const stopIntake = () => {
-    stopAndReturn((text) => {
-      setIntakeListening(false)
-      setIntakeTranscript(text)
-    })
-  }
+  const stopVoice = () => finish((text) => { setRawText(text); setPhase('review') })
 
   const processIntake = async (text) => {
     if (!text.trim()) return
-    setIntakeProcessing(true)
+    setPhase('processing')
     try {
       const res = await fetch('/api/suggest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'intake', transcript: text }),
       })
       const data = await res.json()
-      if (data.extracted) {
-        updateBuyer({ northStar: { ...ns, ...data.extracted } })
-        if (buyer.clientName === '' && data.extracted.clientName) updateBuyer({ clientName: data.extracted.clientName })
-        setIntakeOpen(false)
-        setIntakeTranscript('')
-      }
-    } catch (_) {}
-    setIntakeProcessing(false)
+      if (data.extracted) { patchNS(data.extracted); setIntakeOpen(false); setPhase('idle'); setRawText('') }
+    } catch (_) { setPhase('review') }
   }
 
-  const coachMsg = count === 0 ? "Start the MOVE. Tell me about this buyer."
-    : count < 2 ? "Keep going — every empty field is an unanswered question."
-    : count < 4 ? "Getting clearer. Complete the diagnosis."
-    : "MOVE complete. Update it after every showing."
+  const CONFIDENCE = [
+    { val: 'fuzzy', label: "Can't see the MOVE", sub: 'Still diagnosing' },
+    { val: 'getting-clearer', label: 'MOVE is forming', sub: 'Tests confirming' },
+    { val: 'sharp', label: 'MOVE is clear', sub: 'Ready to prescribe' },
+  ]
 
-  const confidenceNudge = {
-    'fuzzy': "Can't see the MOVE yet — what's the one thing still unclear?",
-    'getting-clearer': "MOVE is forming. Keep testing on the next showing.",
-    'sharp': "Sharp diagnosis. Now prescribe the right home.",
+  const nudge = {
+    fuzzy: "What's the one thing still unclear? Make that the focus of the next showing.",
+    'getting-clearer': 'Keep testing. The picture is forming.',
+    sharp: 'Sharp diagnosis. Now prescribe the right home.',
   }
 
   return (
     <div style={s.pane}>
 
-      {/* Intake panel */}
-      {intakeOpen && (
-        <div style={s.intakePanel}>
-          <div style={s.intakePanelHeader}>
-            <div style={s.intakePanelTitle}>THE MOVE INTERVIEW</div>
-            <button style={s.intakePanelClose} onClick={() => setIntakeOpen(false)}>Dismiss</button>
-          </div>
-          <div style={s.intakePrepNote}>Before the consultation, listen for:</div>
-          <div style={s.prepList}>
-            {CONSULTATION_PREP.map((q, i) => (
-              <div key={i} style={s.prepItem}>
-                <span style={s.prepNum}>{i+1}</span>
-                <span style={s.prepQ}>{q}</span>
-              </div>
-            ))}
-          </div>
-          <div style={s.intakeDivider}>After the consultation —</div>
-          {!intakeTranscript ? (
-            <>
-              <div style={s.intakePrompt}>Tell me about this buyer.</div>
-              <button style={intakeListening ? s.micBtnActive : s.micBtnReady}
-                onClick={intakeListening ? stopIntake : runIntake}>
-                {intakeListening ? '⏹ Done speaking' : '🎙 Tap and talk freely'}
-              </button>
-              {intakeListening && transcript && (
-                <div style={s.intakeLiveText}>{transcript}</div>
-              )}
-              {intakeListening && <div style={s.intakeHint}>Pause 5 seconds to finish automatically.</div>}
-            </>
-          ) : (
-            <>
-              <div style={s.intakeReviewLabel}>What you said:</div>
-              <div style={s.intakeReviewText}>{intakeTranscript}</div>
-              <div style={s.intakeReviewActions}>
-                {intakeProcessing
-                  ? <div style={s.intakeProcessing}>✦ Building the MOVE…</div>
-                  : <>
-                    <button style={s.primaryBtn} onClick={() => processIntake(intakeTranscript)}>Build the MOVE →</button>
-                    <button style={s.ghostBtn} onClick={() => { setIntakeTranscript(''); runIntake() }}>Re-record</button>
-                  </>}
-              </div>
-            </>
-          )}
-        </div>
-      )}
-
-      {/* Coach message */}
-      <div style={s.moveCoachRow}>
-        <div style={s.moveCoachMsg}>{coachMsg}</div>
-        {!intakeOpen && (
-          <button style={s.voiceIntakeBtn} onClick={() => setIntakeOpen(true)}>🎙 Voice Intake</button>
-        )}
-      </div>
-
-      {/* One sentence MOVE */}
-      {ns.oneSentence && (
-        <div style={s.oneSentenceCard}>
-          <div style={s.oneSentenceLabel}>THE DIAGNOSIS</div>
-          <div style={s.oneSentenceText}>{ns.oneSentence}</div>
-        </div>
-      )}
-
-      {/* MOVE fields */}
+      {/* MOVE fields — top */}
       <div style={s.moveWord}>MOVE</div>
       <div style={s.moveGrid}>
-        {MOVE_KEYS.map(k => (
-          <MoveField key={k} letter={k[0].toUpperCase()} label={MOVE_LABELS[k]} question={MOVE_QUESTIONS[k]}
-            value={ns[k] || ''} onChange={v => updateNS({ [k]: v })} />
+        {MOVE.map(m => (
+          <MoveField key={m.key} m={m} value={ns[m.key] || ''} onChange={v => patchNS({ [m.key]: v })} />
         ))}
       </div>
 
-      {/* Location + property type */}
-      <div style={s.moveLocationGrid}>
+      {/* Location + type */}
+      <div style={s.twoCol}>
         <div>
           <FL>Property Type</FL>
-          <input style={{ ...s.field, ...(ns.propertyType ? s.fieldFilled : {}) }}
-            value={ns.propertyType || ''} placeholder="e.g. single family home"
-            onChange={e => updateNS({ propertyType: e.target.value })} />
+          <input style={{ ...s.field, ...(ns.propertyType ? s.fieldOn : {}) }} value={ns.propertyType || ''}
+            placeholder="e.g. single family home" onChange={e => patchNS({ propertyType: e.target.value })} />
         </div>
         <div>
           <FL>Location</FL>
-          <input style={{ ...s.field, ...(ns.location ? s.fieldFilled : {}) }}
-            value={ns.location || ''} placeholder="e.g. Green Hills"
-            onChange={e => updateNS({ location: e.target.value })} />
+          <input style={{ ...s.field, ...(ns.location ? s.fieldOn : {}) }} value={ns.location || ''}
+            placeholder="e.g. Green Hills" onChange={e => patchNS({ location: e.target.value })} />
         </div>
       </div>
 
-      {/* Confidence */}
-      <div style={s.confidenceSection}>
-        <div style={s.confidenceLabel}>How clearly do you see their MOVE?</div>
-        <div style={s.confidenceOptions}>
-          {[
-            { val: 'fuzzy', icon: '◎', label: "Can't see the MOVE", sub: 'Still diagnosing' },
-            { val: 'getting-clearer', icon: '◑', label: 'MOVE is forming', sub: 'Tests confirming' },
-            { val: 'sharp', icon: '●', label: 'MOVE is clear', sub: 'Ready to prescribe' },
-          ].map(opt => (
+      {/* Voice intake toggle */}
+      <button style={s.intakeToggle} onClick={() => setIntakeOpen(o => !o)}>
+        {intakeOpen ? '▲ Close intake' : '🎙 Voice intake — tell me about this buyer'}
+      </button>
+
+      {/* Intake panel */}
+      {intakeOpen && (
+        <div style={s.intakePanel}>
+          <div style={s.intakePrepHead}>Before the consultation, listen for:</div>
+          <div style={s.prepList}>
+            {PREP_QUESTIONS.map((q, i) => (
+              <div key={i} style={s.prepRow}><span style={s.prepN}>{i+1}</span><span style={s.prepQ}>{q}</span></div>
+            ))}
+          </div>
+          <div style={s.intakeDivide}>After the consultation —</div>
+          <div style={s.intakePrompt}>Tell me about this buyer.</div>
+
+          {phase === 'idle' && (
+            <button style={s.micReady} onClick={runVoice}>🎙 Tap and talk freely</button>
+          )}
+          {phase === 'listening' && (
+            <>
+              <div style={s.liveText}>{transcript || <span style={{ color: C.textMuted, fontStyle: 'italic' }}>Listening…</span>}</div>
+              <button style={s.micActive} onClick={stopVoice}>⏹ Done speaking</button>
+              <div style={s.hint}>Pause 5 seconds to finish automatically.</div>
+            </>
+          )}
+          {phase === 'review' && (
+            <>
+              <div style={s.reviewLabel}>What you said:</div>
+              <textarea style={{ ...s.textarea, minHeight: 80, marginBottom: 12 }} value={rawText}
+                onChange={e => setRawText(e.target.value)} />
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button style={s.btn} onClick={() => processIntake(rawText)}>Build the MOVE →</button>
+                <button style={s.btnGhost} onClick={() => { setPhase('idle'); setRawText('') }}>Re-record</button>
+              </div>
+            </>
+          )}
+          {phase === 'processing' && <div style={s.processing}>✦ Building the MOVE…</div>}
+        </div>
+      )}
+
+      {/* Confidence signal */}
+      <div style={s.confSection}>
+        <div style={s.confLabel}>How clearly do you see their MOVE?</div>
+        <div style={s.confOptions}>
+          {CONFIDENCE.map(opt => (
             <button key={opt.val}
-              style={{ ...s.confidenceOption, ...(buyer.confidence === opt.val ? s.confidenceOptionActive : {}) }}
-              onClick={() => updateBuyer({ confidence: opt.val })}>
-              <div style={s.confidenceIcon}>{opt.icon}</div>
-              <div style={s.confidenceOptionLabel}>{opt.label}</div>
-              <div style={s.confidenceOptionSub}>{opt.sub}</div>
+              style={{ ...s.confOpt, ...(buyer.confidence === opt.val ? s.confOptOn : {}) }}
+              onClick={() => patch({ confidence: opt.val })}>
+              <div style={s.confOptLabel}>{opt.label}</div>
+              <div style={s.confOptSub}>{opt.sub}</div>
             </button>
           ))}
         </div>
-        {buyer.confidence && confidenceNudge[buyer.confidence] && (
-          <div style={s.confidenceNudge}>{confidenceNudge[buyer.confidence]}</div>
+        {buyer.confidence && nudge[buyer.confidence] && (
+          <div style={s.confNudge}>{nudge[buyer.confidence]}</div>
         )}
       </div>
 
@@ -781,66 +646,59 @@ function MoveTab({ buyer, updateNS, updateBuyer, agents }) {
   )
 }
 
-function MoveField({ letter, label, question, value, onChange }) {
-  const { start, stopAndReturn, listening, transcript } = useFreeVoice()
-  const [fieldListening, setFieldListening] = useState(false)
+function MoveField({ m, value, onChange }) {
+  const { start, finish, listening, transcript } = useVoice()
+  const [active, setActive] = useState(false)
 
-  const handleMic = () => {
-    if (fieldListening) {
-      stopAndReturn((text) => { setFieldListening(false); if (text) onChange(text) })
-    } else {
-      setFieldListening(true)
-      start((text) => { setFieldListening(false); if (text) onChange(text) })
-    }
+  const toggle = () => {
+    if (active) { finish((t) => { setActive(false); if (t) onChange(t) }) }
+    else { setActive(true); start((t) => { setActive(false); if (t) onChange(t) }) }
   }
 
   return (
-    <div style={{ ...s.moveField, ...(value ? s.moveFieldFilled : {}) }}>
-      <div style={s.moveFieldHeader}>
-        <span style={s.moveFieldLetter}>{letter}</span>
-        <div>
-          <div style={s.moveFieldLabel}>{label}</div>
-          <div style={s.moveFieldQuestion}>{question}</div>
+    <div style={{ ...s.moveField, ...(value ? s.moveFieldOn : {}) }}>
+      <div style={s.moveFieldHead}>
+        <span style={s.moveLetter}>{m.letter}</span>
+        <div style={{ flex: 1 }}>
+          <div style={s.moveLabel}>{m.label}</div>
+          <div style={s.moveQ}>{m.question}</div>
         </div>
-        <button style={{ ...s.moveFieldMic, ...(fieldListening ? s.moveFieldMicActive : {}) }} onClick={handleMic}>
-          {fieldListening ? '⏹' : '🎙'}
+        <button style={{ ...s.micBtn, ...(active ? s.micBtnActive : {}) }} onClick={toggle}>
+          {active ? '⏹' : '🎙'}
         </button>
       </div>
-      {fieldListening && transcript && <div style={s.moveFieldLive}>{transcript}</div>}
-      <input style={s.moveFieldInput} value={value} placeholder="Type or speak →"
-        onChange={e => onChange(e.target.value)} />
+      {active && <div style={s.fieldLive}>{transcript || <span style={{ color: C.textMuted, fontStyle: 'italic' }}>Listening…</span>}</div>}
+      <input style={s.moveInput} value={value} placeholder="Type or speak →" onChange={e => onChange(e.target.value)} />
     </div>
   )
 }
 
 // ─── CONTACTS TAB ─────────────────────────────────────────────────────────────
-function ContactsTab({ buyer, updateBuyer, agents }) {
+function ContactsTab({ buyer, patch, agents }) {
+  const upd = (cid, key, val) => patch({ contacts: buyer.contacts.map(c => c.id === cid ? { ...c, [key]: val } : c) })
+  const setPrimary = (cid) => patch({ contacts: buyer.contacts.map(c => ({ ...c, isPrimary: c.id === cid })), clientName: buyer.contacts.find(c => c.id === cid)?.name || '' })
   return (
     <div style={s.pane}>
-      {buyer.contacts.map(contact => {
-        const upd = (key, val) => updateBuyer({ contacts: buyer.contacts.map(c => c.id === contact.id ? { ...c, [key]: val } : c) })
-        const setPrimary = () => updateBuyer({ contacts: buyer.contacts.map(c => ({ ...c, isPrimary: c.id === contact.id })), clientName: contact.name })
-        return (
-          <div key={contact.id} style={{ ...s.contactCard, ...(contact.isPrimary ? s.contactCardPrimary : {}) }}>
-            <div style={s.contactCardTop}>
-              <input style={s.roleInput} value={contact.role} onChange={e => upd('role', e.target.value)} />
-              {contact.isPrimary ? <span style={s.primaryBadge}>Primary</span> : <button style={s.setPrimaryBtn} onClick={setPrimary}>Set as primary</button>}
-            </div>
-            <div style={s.twoCol}>
-              <div style={{ gridColumn: '1/-1' }}>
-                <FL>Full Name</FL>
-                <input style={s.field} value={contact.name} placeholder="Full name"
-                  onChange={e => { upd('name', e.target.value); if (contact.isPrimary) updateBuyer({ clientName: e.target.value }) }} />
-              </div>
-              <div><FL>Phone</FL><input style={s.field} value={contact.phone} placeholder="(615) 000-0000" onChange={e => upd('phone', formatPhone(e.target.value))} /></div>
-              <div><FL>Email</FL><input style={s.field} value={contact.email} placeholder="email@example.com" onChange={e => upd('email', e.target.value)} /></div>
-            </div>
+      {buyer.contacts.map(c => (
+        <div key={c.id} style={{ ...s.contactCard, ...(c.isPrimary ? s.contactCardOn : {}) }}>
+          <div style={s.contactTop}>
+            <input style={s.roleInput} value={c.role} onChange={e => upd(c.id, 'role', e.target.value)} />
+            {c.isPrimary ? <span style={s.primaryTag}>Primary</span> : <button style={s.setPrimary} onClick={() => setPrimary(c.id)}>Set as primary</button>}
           </div>
-        )
-      })}
+          <div style={s.twoCol}>
+            <div style={{ gridColumn: '1/-1' }}>
+              <FL>Full Name</FL>
+              <input style={s.field} value={c.name} placeholder="Full name"
+                onChange={e => { upd(c.id, 'name', e.target.value); if (c.isPrimary) patch({ clientName: e.target.value }) }} />
+            </div>
+            <div><FL>Phone</FL><input style={s.field} value={c.phone} placeholder="(615) 000-0000" onChange={e => upd(c.id, 'phone', formatPhone(e.target.value))} /></div>
+            <div><FL>Email</FL><input style={s.field} value={c.email} placeholder="email@example.com" onChange={e => upd(c.id, 'email', e.target.value)} /></div>
+          </div>
+        </div>
+      ))}
       <div style={{ marginTop: 8 }}>
         <FL>Assigned Agent</FL>
-        <select style={s.field} value={buyer.agentName} onChange={e => updateBuyer({ agentName: e.target.value })}>
+        <select style={s.field} value={buyer.agentName} onChange={e => patch({ agentName: e.target.value })}>
           <option value="">Select agent…</option>
           {agents.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
         </select>
@@ -855,38 +713,33 @@ function ShowingsTab({ buyer, openShowing, deleteShowing }) {
   return (
     <div style={s.pane}>
       {sorted.length === 0 ? (
-        <div style={s.emptyState}>
+        <div style={s.empty}>
           <div style={s.emptyTitle}>No showings yet</div>
           <div style={s.emptySub}>Log the first showing to start testing the MOVE.</div>
-          <button style={s.primaryBtn} onClick={() => openShowing()}>+ Log First Showing</button>
+          <button style={s.btn} onClick={() => openShowing()}>+ Log First Showing</button>
         </div>
       ) : (
         <>
-          <button style={{ ...s.primaryBtn, marginBottom: 20 }} onClick={() => openShowing()}>+ Log Showing</button>
+          <button style={{ ...s.btn, marginBottom: 20 }} onClick={() => openShowing()}>+ Log Showing</button>
           {sorted.map(sh => (
-            <div key={sh.id} style={s.showingCard}>
-              <div style={s.showingCardTop}>
+            <div key={sh.id} style={s.showCard}>
+              <div style={s.showTop}>
                 <div>
-                  <div style={s.showingAddr}>{sh.address || 'No address'}</div>
-                  <div style={s.showingDate}>{sh.date ? new Date(sh.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '—'}{sh.agentName ? ` · ${sh.agentName}` : ''}</div>
-                  {sh.testingToday && <div style={s.showingTesting}><span style={s.showingTestingLabel}>Testing: </span>{sh.testingToday}</div>}
+                  <div style={s.showAddr}>{sh.address || 'No address'}</div>
+                  <div style={s.showDate}>{sh.date ? new Date(sh.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '—'}{sh.agentName ? ` · ${sh.agentName}` : ''}</div>
+                  {sh.testingToday && <div style={s.showTesting}><span style={s.showTestLabel}>Testing: </span>{sh.testingToday}</div>}
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  <button style={s.ghostBtn} onClick={() => openShowing(sh)}>Edit</button>
-                  <button style={s.dangerBtn} onClick={() => { if (window.confirm('Delete?')) deleteShowing(sh.id) }}>Delete</button>
+                  <button style={s.btnGhost} onClick={() => openShowing(sh)}>Edit</button>
+                  <button style={s.btnDanger} onClick={() => { if (window.confirm('Delete?')) deleteShowing(sh.id) }}>Delete</button>
                 </div>
               </div>
               {sh.hypothesisUpdate && (
-                <div style={s.nsUpdateBlock}>
-                  <div style={s.nsUpdateLabel}>MOVE shift</div>
-                  <div style={s.nsUpdateText}>{sh.hypothesisUpdate}</div>
-                </div>
+                <div style={s.showShift}><span style={s.showShiftLabel}>MOVE shift: </span>{sh.hypothesisUpdate}</div>
               )}
-              <div style={s.debriefGrid}>
-                {DEBRIEF_FIELDS.filter(d => d.key !== 'hypothesisUpdate').map(d => sh[d.key] ? (
-                  <div key={d.key}><span style={s.debriefKey}>{d.label}: </span>{sh[d.key]}</div>
-                ) : null)}
-              </div>
+              {(sh.freeText || sh.respondedTo) && (
+                <div style={s.showNote}>{sh.freeText || sh.respondedTo}</div>
+              )}
             </div>
           ))}
         </>
@@ -898,169 +751,336 @@ function ShowingsTab({ buyer, openShowing, deleteShowing }) {
 // ─── REFINEMENTS TAB ─────────────────────────────────────────────────────────
 function RefinementsTab({ buyer }) {
   const ns = buyer.northStar
-  const count = nsComplete(ns)
-  const withUpdates = [...buyer.showings].sort((a, b) => new Date(a.date) - new Date(b.date)).filter(s => s.hypothesisUpdate)
-
+  const count = moveCount(ns)
+  const shifts = [...buyer.showings].sort((a, b) => new Date(a.date) - new Date(b.date)).filter(s => s.hypothesisUpdate)
   return (
     <div style={s.pane}>
       {buyer.isMatch && (
-        <div style={s.matchReveal}>
-          <div style={s.matchRevealHeader}>
-            <span style={s.matchRevealTitle}>✓ MOVE FOUND</span>
-            <span style={s.matchRevealSub}>{buyer.showings.length} showings · {withUpdates.length} hypothesis shifts</span>
+        <div style={s.matchCard}>
+          <div style={s.matchHead}>
+            <span style={s.matchTitle}>✓ MOVE FOUND</span>
+            <span style={s.matchMeta}>{buyer.showings.length} showings · {shifts.length} shifts</span>
           </div>
           {ns.oneSentence && <div style={s.matchSentence}>{ns.oneSentence}</div>}
-          <div style={s.matchRevealStory}>
-            <div style={s.matchStoryItem}>
-              <div style={s.matchStoryLabel}>Starting diagnosis</div>
-              <div style={s.matchStoryTextOld}>{count > 0 ? `${ns.propertyType || '—'} in ${ns.location || '—'} · ${ns.motivation || '—'}` : 'Not yet built'}</div>
-            </div>
-            {withUpdates.map((sh, i) => (
-              <div key={sh.id} style={s.matchStoryItem}>
-                <div style={s.matchStoryLabel}>Showing {i + 1}{sh.address ? ` · ${sh.address}` : ''}</div>
-                <div style={{ ...s.matchStoryText, ...(i === withUpdates.length - 1 ? s.matchStoryTextFinal : {}) }}>{sh.hypothesisUpdate}</div>
+          <div style={s.matchArc}>
+            <div style={s.arcItem}><div style={s.arcLabel}>Starting diagnosis</div><div style={s.arcOld}>{count > 0 ? `${ns.propertyType || '—'} in ${ns.location || '—'} · ${ns.motivation || '—'}` : 'Not built'}</div></div>
+            {shifts.map((sh, i) => (
+              <div key={sh.id} style={s.arcItem}>
+                <div style={s.arcLabel}>Showing {i+1}{sh.address ? ` · ${sh.address}` : ''}</div>
+                <div style={{ ...s.arcText, ...(i === shifts.length - 1 ? s.arcFinal : {}) }}>{sh.hypothesisUpdate}</div>
               </div>
             ))}
           </div>
         </div>
       )}
-
-      <div style={s.refinementsIntro}>How your team's understanding of their MOVE evolved. Every entry is the picture getting sharper.</div>
-
-      {buyer.showings.length === 0 ? (
-        <div style={s.emptySub}>Log showings to see the MOVE evolve here.</div>
-      ) : (
-        <div style={s.timeline}>
-          <div style={s.timelineItem}>
-            <div style={s.timelineDot} />
-            <div>
-              <div style={s.timelineLabel}>Starting diagnosis</div>
-              <div style={s.timelineText}>{count > 0 ? `${ns.propertyType || '—'} in ${ns.location || '—'} · ${ns.motivation || '—'}` : <span style={{ color: C.textMuted, fontStyle: 'italic' }}>Not yet built</span>}</div>
-            </div>
-          </div>
-          {withUpdates.length === 0
-            ? <div style={{ paddingLeft: 20, fontSize: 13, color: C.textMuted, fontStyle: 'italic' }}>No MOVE shifts yet.</div>
-            : withUpdates.map((sh, i) => (
-              <div key={sh.id} style={s.timelineItem}>
-                <div style={s.timelineDot} />
-                <div>
-                  <div style={s.timelineLabel}>Showing {i+1}{sh.address ? ` · ${sh.address}` : ''}{sh.agentName ? ` · ${sh.agentName}` : ''}</div>
-                  <div style={s.timelineText}>{sh.hypothesisUpdate}</div>
+      <div style={s.refIntro}>How the team's understanding of their MOVE evolved.</div>
+      {buyer.showings.length === 0
+        ? <div style={s.emptySub}>Log showings to see the MOVE evolve here.</div>
+        : (
+          <div style={s.timeline}>
+            <div style={s.tlItem}><div style={s.tlDot} /><div><div style={s.tlLabel}>Starting diagnosis</div><div style={s.tlText}>{count > 0 ? `${ns.propertyType || '—'} in ${ns.location || '—'} · ${ns.motivation || '—'}` : <span style={{ color: C.textMuted, fontStyle: 'italic' }}>Not yet built</span>}</div></div></div>
+            {shifts.length === 0
+              ? <div style={{ paddingLeft: 20, fontSize: 13, color: C.textMuted, fontStyle: 'italic' }}>No MOVE shifts yet.</div>
+              : shifts.map((sh, i) => (
+                <div key={sh.id} style={s.tlItem}>
+                  <div style={s.tlDot} />
+                  <div><div style={s.tlLabel}>Showing {i+1}{sh.address ? ` · ${sh.address}` : ''}{sh.agentName ? ` · ${sh.agentName}` : ''}</div><div style={s.tlText}>{sh.hypothesisUpdate}</div></div>
                 </div>
-              </div>
-            ))}
-        </div>
-      )}
+              ))}
+          </div>
+        )}
     </div>
   )
 }
 
 // ─── SHOWING FORM ─────────────────────────────────────────────────────────────
-function ShowingForm({ draft, setDraft, onSave, onCancel, isEdit, buyer }) {
+function ShowingForm({ draft, setDraft, buyer, onSave, onCancel, isEdit }) {
   const upd = (k, v) => setDraft(d => ({ ...d, [k]: v }))
-  const { start, stopAndReturn, listening, transcript } = useFreeVoice()
-  const [debriefListening, setDebriefListening] = useState(false)
-  const [debriefProcessing, setDebriefProcessing] = useState(false)
-
-  const runVoiceDebrief = () => {
-    setDebriefListening(true)
-    start((text) => { setDebriefListening(false); processVoiceDebrief(text) })
-  }
-
-  const stopVoiceDebrief = () => {
-    stopAndReturn((text) => { setDebriefListening(false); processVoiceDebrief(text) })
-  }
-
-  const processVoiceDebrief = async (text) => {
-    if (!text.trim()) return
-    setDebriefProcessing(true)
-    try {
-      const res = await fetch('/api/suggest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'intake', transcript: text }),
-      })
-      const data = await res.json()
-      if (data.extracted) {
-        const mapping = { motivation: 'respondedTo', outcome: 'moreTrue', veto: 'pulledBackFrom', exchange: 'hypothesisUpdate' }
-        const updates = {}
-        Object.entries(mapping).forEach(([from, to]) => { if (data.extracted[from]) updates[to] = data.extracted[from] })
-        setDraft(d => ({ ...d, ...updates }))
-      }
-    } catch (_) {}
-    setDebriefProcessing(false)
-  }
-
+  const { start, finish, listening, transcript } = useVoice()
+  const [phase, setPhase] = useState('idle') // idle | listening | processing
+  const [showDetail, setShowDetail] = useState(false)
   const ns = buyer?.northStar
   const moveSummary = ns?.oneSentence || [ns?.propertyType, ns?.location, ns?.motivation].filter(Boolean).join(' · ')
 
+  const runVoice = () => {
+    setPhase('listening')
+    start((text) => { setPhase('idle'); upd('freeText', text); upd('respondedTo', text) })
+  }
+
+  const stopVoice = () => finish((text) => { setPhase('idle'); upd('freeText', text); upd('respondedTo', text) })
+
   return (
     <div style={s.formScreen}>
-      <div style={s.formTopBar}>
-        <button style={s.backBtn} onClick={onCancel}>← Back</button>
-        <div style={s.formTopTitle}>{isEdit ? 'Edit Showing' : 'Log a Showing'}</div>
-        <button style={s.voiceDebriefBtn} onClick={debriefListening ? stopVoiceDebrief : runVoiceDebrief}>
-          {debriefListening ? '⏹ Done' : '🎙 Talk freely'}
-        </button>
+      <div style={s.formBar}>
+        <button style={s.back} onClick={onCancel}>← Back</button>
+        <div style={s.formTitle}>{isEdit ? 'Edit Showing' : 'Log a Showing'}</div>
+        <div style={{ width: 60 }} />
       </div>
-
       <div style={s.formScroll}>
         <div style={s.formBody}>
 
           {/* Current MOVE */}
           {moveSummary && (
-            <div style={s.formMoveCard}>
+            <div style={s.formMove}>
               <div style={s.formMoveLabel}>CURRENT MOVE</div>
               <div style={s.formMoveText}>{moveSummary}</div>
             </div>
           )}
 
-          {/* Coach prompt */}
-          <div style={s.formCoachCard}>
-            <div style={s.formCoachQ}>Did the MOVE get clearer?</div>
-            <div style={s.formCoachSub}>Talk freely using the button above — AI will extract everything. Or fill in the fields below.</div>
-          </div>
-
-          {debriefListening && (
-            <div style={s.formLiveText}>{transcript || <span style={{ color: C.textMuted, fontStyle: 'italic' }}>Listening… speak freely about the showing.</span>}</div>
-          )}
-          {debriefProcessing && <div style={s.formProcessing}>✦ Extracting from what you said…</div>}
-
-          {/* Date + agent */}
+          {/* Date + address */}
           <div style={s.twoCol}>
             <div><FL>Date</FL><input type="date" style={s.field} value={draft.date} onChange={e => upd('date', e.target.value)} /></div>
-            <div><FL>Logged by</FL><input style={s.field} value={draft.agentName} placeholder="Agent name" onChange={e => upd('agentName', e.target.value)} /></div>
+            <div><FL>Logged by</FL><input style={s.field} value={draft.agentName} placeholder="Agent" onChange={e => upd('agentName', e.target.value)} /></div>
           </div>
           <div style={{ marginBottom: 16 }}>
             <FL>Property Address</FL>
             <input style={s.field} value={draft.address} placeholder="123 Main St" onChange={e => upd('address', e.target.value)} />
           </div>
 
-          {/* Pre-showing test */}
-          <div style={{ marginBottom: 16 }}>
+          {/* Testing today */}
+          <div style={{ marginBottom: 20 }}>
             <FL>What are you testing today?</FL>
-            <input style={{ ...s.field, borderColor: C.gold }} value={draft.testingToday || ''} placeholder="e.g. Whether school proximity matters more than the home itself…"
+            <input style={{ ...s.field, borderColor: C.gold }} value={draft.testingToday || ''}
+              placeholder="e.g. Whether school proximity matters more than the home…"
               onChange={e => upd('testingToday', e.target.value)} />
           </div>
 
-          {/* Debrief fields */}
-          <div style={s.debriefSection}>
-            <div style={s.debriefSectionLabel}>SHOWING DEBRIEF</div>
-            {DEBRIEF_FIELDS.map(d => (
-              <div key={d.key} style={{ marginBottom: 14 }}>
-                <div style={s.debriefFieldRow}>
-                  <div style={s.debriefFieldMeta}>
-                    <span style={s.debriefFieldKey}>{d.label}</span>
-                    <span style={s.debriefFieldQ}>{d.question}</span>
-                  </div>
-                </div>
-                <textarea style={{ ...s.textarea, ...(d.key === 'hypothesisUpdate' ? { borderColor: C.gold, minHeight: 80 } : {}) }}
-                  value={draft[d.key] || ''} onChange={e => upd(d.key, e.target.value)} />
-              </div>
-            ))}
+          {/* Main debrief */}
+          <div style={s.debriefBox}>
+            <div style={s.debriefBoxHead}>WHAT DID YOU LEARN?</div>
+            <div style={s.debriefBoxSub}>Talk freely or type. AI updates the MOVE automatically.</div>
+
+            {phase === 'idle' && (
+              <button style={s.debriefMic} onClick={runVoice}>🎙 Tap and talk freely</button>
+            )}
+            {phase === 'listening' && (
+              <>
+                <div style={s.liveText}>{transcript || <span style={{ color: C.textMuted, fontStyle: 'italic' }}>Listening… speak naturally.</span>}</div>
+                <button style={s.debriefMicOn} onClick={stopVoice}>⏹ Done speaking</button>
+                <div style={s.hint}>Pause 5 seconds to finish automatically.</div>
+              </>
+            )}
+
+            <div style={s.orRow}><span style={s.orText}>or type</span></div>
+            <textarea style={{ ...s.textarea, minHeight: 110 }} value={draft.freeText || ''}
+              placeholder="What happened? What did they respond to? Did the MOVE shift?"
+              onChange={e => { upd('freeText', e.target.value); upd('respondedTo', e.target.value) }} />
           </div>
 
-          <button style={s.saveShowingBtn} onClick={() => onSave(draft)}>Save Showing</button>
+          {/* Detail toggle */}
+          <button style={s.detailToggle} onClick={() => setShowDetail(o => !o)}>
+            {showDetail ? '▲ Hide detail fields' : '▼ Add detail manually'}
+          </button>
+          {showDetail && (
+            <div style={s.detailFields}>
+              {DEBRIEF.map(d => (
+                <div key={d.key} style={{ marginBottom: 12 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginBottom: 4 }}>
+                    <span style={s.detailKey}>{d.label}</span>
+                    <span style={s.detailQ}>{d.question}</span>
+                  </div>
+                  <textarea style={{ ...s.textarea, minHeight: 60, ...(d.key === 'hypothesisUpdate' ? { borderColor: C.gold } : {}) }}
+                    value={draft[d.key] || ''} onChange={e => upd(d.key, e.target.value)} />
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button style={s.saveBtn} onClick={() => onSave(draft)}>Save Showing</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── MANAGER VIEW ─────────────────────────────────────────────────────────────
+function ManagerView({ buyers, agents, onBack, onSelect }) {
+  const [insights, setInsights] = useState({})
+  const [loadingInsights, setLoadingInsights] = useState(false)
+
+  const agentBuyers = agents.map(a => ({
+    agent: a,
+    buyers: buyers.filter(b => b.agentName === a.name),
+  })).filter(ab => ab.buyers.length > 0)
+
+  const loadInsights = async () => {
+    setLoadingInsights(true)
+    const results = {}
+    for (const ab of agentBuyers) {
+      try {
+        const res = await fetch('/api/suggest', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'coaching_insights', agentName: ab.agent.name, buyers: ab.buyers }),
+        })
+        const data = await res.json()
+        if (data.insights) results[ab.agent.name] = data.insights
+      } catch (_) {}
+    }
+    setInsights(results)
+    setLoadingInsights(false)
+  }
+
+  const teamStats = {
+    total: buyers.length,
+    matched: buyers.filter(b => b.isMatch).length,
+    fuzzy: buyers.filter(b => !b.isMatch && moveCount(b.northStar) === 0).length,
+    active: buyers.filter(b => b.status === 'Active').length,
+  }
+
+  return (
+    <div style={s.screen}>
+      <div style={s.topBar}>
+        <div>
+          <div style={s.brand}>BUILD THE HOUSE</div>
+          <div style={s.brandSub}>Manager View</div>
+        </div>
+        <div style={s.topRight}>
+          <button style={s.topBtn} onClick={onBack}>← Back</button>
+          <button style={s.topBtnGold} onClick={loadInsights} disabled={loadingInsights}>
+            {loadingInsights ? 'Analyzing…' : '✦ Get Coaching Insights'}
+          </button>
+        </div>
+      </div>
+
+      <div style={s.managerBody}>
+        {/* Team summary */}
+        <div style={s.statRow}>
+          {[
+            { label: 'Total Buyers', val: teamStats.total },
+            { label: 'Active', val: teamStats.active },
+            { label: 'Matches Found', val: teamStats.matched },
+            { label: 'MOVE Not Started', val: teamStats.fuzzy, alert: teamStats.fuzzy > 0 },
+          ].map(stat => (
+            <div key={stat.label} style={s.statCard}>
+              <div style={{ ...s.statVal, ...(stat.alert ? { color: C.red } : {}) }}>{stat.val}</div>
+              <div style={s.statLabel}>{stat.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Agent sections */}
+        {agentBuyers.map(({ agent, buyers: ab }) => {
+          const matched = ab.filter(b => b.isMatch).length
+          const fuzzy = ab.filter(b => !b.isMatch && moveCount(b.northStar) === 0).length
+          const avgShowings = ab.filter(b => b.isMatch && b.showings.length > 0).reduce((sum, b) => sum + b.showings.length, 0) / (matched || 1)
+          const ins = insights[agent.name]
+
+          return (
+            <div key={agent.id} style={s.agentSection}>
+              <div style={s.agentSectionHead}>
+                <div>
+                  <div style={s.agentSectionName}>{agent.name}</div>
+                  <div style={s.agentSectionMeta}>{ab.length} buyers · {matched} matches · {fuzzy > 0 ? <span style={{ color: C.red }}>{fuzzy} MOVE not started</span> : 'all started'}</div>
+                </div>
+                {matched > 0 && <div style={s.agentAvg}>{avgShowings.toFixed(1)} avg showings to match</div>}
+              </div>
+
+              {ins && (
+                <div style={s.insightCard}>
+                  <div style={s.insightRow}>
+                    <span style={s.insightLabel}>Weakest letter:</span>
+                    <span style={s.insightVal}>{ins.weakestLetter}</span>
+                  </div>
+                  <div style={s.insightRow}>
+                    <span style={s.insightLabel}>Pattern:</span>
+                    <span style={s.insightVal}>{ins.pattern}</span>
+                  </div>
+                  <div style={s.insightCoach}>
+                    <span style={s.insightCoachLabel}>Coaching prompt: </span>
+                    {ins.coachingPrompt}
+                  </div>
+                </div>
+              )}
+
+              <div style={s.agentBuyerList}>
+                {ab.map(b => {
+                  const ms = moveStatus(b.northStar, b.isMatch)
+                  return (
+                    <div key={b.id} style={s.agentBuyerRow} onClick={() => onSelect(b.id)}>
+                      <div style={s.agentBuyerName}>{b.clientName || 'Unnamed'}</div>
+                      <div style={{ ...s.agentBuyerStatus, color: ms.color }}>{ms.label}</div>
+                      <div style={s.agentBuyerShowing}>{b.showings.length} showings</div>
+                      <div style={s.agentBuyerArrow}>→</div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ─── PERFORMANCE VIEW ─────────────────────────────────────────────────────────
+function PerformanceView({ buyers, agentName, onBack }) {
+  const mine = buyers.filter(b => b.agentName === agentName)
+  const matched = mine.filter(b => b.isMatch)
+  const avgShowings = matched.length > 0 ? (matched.reduce((s, b) => s + b.showings.length, 0) / matched.length).toFixed(1) : '—'
+  const completeAtOne = mine.filter(b => {
+    const firstShowing = [...b.showings].sort((a, c) => new Date(a.date) - new Date(c.date))[0]
+    if (!firstShowing) return false
+    return moveCount(b.northStar) === 4
+  }).length
+  const completeRate = mine.length > 0 ? Math.round((completeAtOne / mine.length) * 100) : 0
+  const totalShifts = mine.reduce((s, b) => s + b.showings.filter(sh => sh.hypothesisUpdate).length, 0)
+  const avgShifts = matched.length > 0 ? (matched.reduce((s, b) => s + b.showings.filter(sh => sh.hypothesisUpdate).length, 0) / matched.length).toFixed(1) : '—'
+
+  return (
+    <div style={s.screen}>
+      <div style={s.topBar}>
+        <div>
+          <div style={s.brand}>BUILD THE HOUSE</div>
+          <div style={s.brandSub}>Your Diagnostic Performance</div>
+        </div>
+        <button style={s.topBtn} onClick={onBack}>← Back</button>
+      </div>
+
+      <div style={s.managerBody}>
+        <div style={s.perfIntro}>Your diagnosis is getting sharper. These numbers reflect the quality of your thinking — not just your activity.</div>
+
+        <div style={s.statRow}>
+          {[
+            { label: 'Total Buyers', val: mine.length },
+            { label: 'Matches Found', val: matched.length },
+            { label: 'Avg Showings to Match', val: avgShowings },
+            { label: 'MOVE Shifts Total', val: totalShifts },
+          ].map(stat => (
+            <div key={stat.label} style={s.statCard}>
+              <div style={s.statVal}>{stat.val}</div>
+              <div style={s.statLabel}>{stat.label}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={s.perfInsightRow}>
+          <div style={s.perfInsight}>
+            <div style={s.perfInsightVal}>{completeRate}%</div>
+            <div style={s.perfInsightLabel}>MOVE complete by showing 1</div>
+            <div style={s.perfInsightSub}>Higher means sharper intake diagnosis</div>
+          </div>
+          <div style={s.perfInsight}>
+            <div style={s.perfInsightVal}>{avgShifts}</div>
+            <div style={s.perfInsightLabel}>Avg MOVE shifts before match</div>
+            <div style={s.perfInsightSub}>Shifts mean learning — that's good</div>
+          </div>
+        </div>
+
+        <div style={s.perfHistory}>
+          <div style={s.perfHistoryHead}>RECENT BUYERS</div>
+          {mine.length === 0 && <div style={s.emptySub}>No buyers yet.</div>}
+          {[...mine].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map(b => {
+            const ms = moveStatus(b.northStar, b.isMatch)
+            const shifts = b.showings.filter(s => s.hypothesisUpdate).length
+            return (
+              <div key={b.id} style={s.perfRow}>
+                <div style={s.perfRowName}>{b.clientName || 'Unnamed'}</div>
+                <div style={{ ...s.perfRowStatus, color: ms.color }}>{ms.label}</div>
+                <div style={s.perfRowMeta}>{b.showings.length} showings · {shifts} shifts</div>
+              </div>
+            )
+          })}
         </div>
       </div>
     </div>
@@ -1068,237 +1088,255 @@ function ShowingForm({ draft, setDraft, onSave, onCancel, isEdit, buyer }) {
 }
 
 // ─── SHARED ───────────────────────────────────────────────────────────────────
-function FL({ children }) { return <div style={s.fieldLabel}>{children}</div> }
+function FL({ children }) { return <div style={s.fl}>{children}</div> }
 
 // ─── STYLES ───────────────────────────────────────────────────────────────────
 const s = {
-  screen:      { display: 'flex', flexDirection: 'column', height: '100vh', background: C.bg, fontFamily: "Georgia, 'Times New Roman', serif", overflow: 'hidden', color: C.text },
-  buyerScreen: { display: 'flex', flexDirection: 'column', height: '100vh', background: C.bg, fontFamily: "Georgia, 'Times New Roman', serif", overflow: 'hidden', color: C.text },
-  formScreen:  { display: 'flex', flexDirection: 'column', height: '100vh', background: C.bg, fontFamily: "Georgia, 'Times New Roman', serif", overflow: 'hidden', color: C.text },
-  loadingScreen: { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'Georgia, serif', color: C.textMuted, fontSize: 14 },
+  // Layout
+  screen:      { display: 'flex', flexDirection: 'column', height: '100vh', background: C.bg, fontFamily: "Georgia, 'Times New Roman', serif", overflow: 'hidden', color: C.text, fontSize: 14 },
+  buyerScreen: { display: 'flex', flexDirection: 'column', height: '100vh', background: C.bg, fontFamily: "Georgia, 'Times New Roman', serif", overflow: 'hidden', color: C.text, fontSize: 14 },
+  formScreen:  { display: 'flex', flexDirection: 'column', height: '100vh', background: C.bg, fontFamily: "Georgia, 'Times New Roman', serif", overflow: 'hidden', color: C.text, fontSize: 14 },
+  center:      { display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'Georgia, serif', color: C.textMuted, fontSize: 14 },
 
-  topBar:      { background: C.dark, padding: '14px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 },
-  topBarLeft:  {},
-  brand:       { fontSize: 10, letterSpacing: '0.22em', color: C.gold, fontWeight: 'bold', marginBottom: 2 },
-  brandSub:    { fontSize: 11, color: C.onDarkSub },
-  topBarRight: { display: 'flex', alignItems: 'center', gap: 14 },
-  agentLabel:  { fontSize: 12, color: C.onDarkMid },
-  mindsetBtn:  { padding: '6px 12px', border: '1px solid #3c3835', borderRadius: 4, background: 'transparent', color: C.onDarkMid, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
-  addBuyerBtn: { padding: '7px 16px', border: 'none', borderRadius: 4, background: C.gold, color: C.dark, fontSize: 13, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
-  signOutBtn:  { fontSize: 11, color: C.onDarkSub, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  // Top bar
+  topBar:    { background: C.dark, padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 },
+  brand:     { fontSize: 10, letterSpacing: '0.22em', color: C.gold, fontWeight: 'bold', marginBottom: 2 },
+  brandSub:  { fontSize: 11, color: C.onDarkSub },
+  topRight:  { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  agentName: { fontSize: 12, color: C.onDarkMid },
+  topBtn:    { padding: '6px 12px', border: '1px solid #3c3835', borderRadius: 4, background: 'transparent', color: C.onDarkMid, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  topBtnGold:{ padding: '6px 14px', border: 'none', borderRadius: 4, background: C.gold, color: C.dark, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
+  topBtnGhost:{ padding: '6px 10px', border: 'none', borderRadius: 4, background: 'transparent', color: C.onDarkSub, fontSize: 11, cursor: 'pointer', fontFamily: 'Georgia, serif' },
 
-  mindsetBar:  { background: '#292524', borderBottom: '1px solid #3c3835', padding: '16px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px 28px', flexShrink: 0, overflowY: 'auto', maxHeight: 260 },
-  mindsetSection: {},
-  mindsetSectionTitle: { fontSize: 9, letterSpacing: '0.18em', color: C.gold, fontWeight: 'bold', marginBottom: 8 },
-  mindsetText: { fontSize: 12, color: C.onDarkMid, lineHeight: 1.6 },
-  mindsetMoveItem: { display: 'flex', gap: 8, marginBottom: 4 },
-  mindsetMoveLetter: { fontSize: 12, color: C.gold, fontWeight: 'bold', minWidth: 12 },
-  mindsetMoveText: { fontSize: 12, color: C.onDarkMid },
-  mindsetPrepItem: { display: 'flex', gap: 8, marginBottom: 4 },
-  mindsetPrepNum: { fontSize: 11, color: C.gold, minWidth: 14 },
+  // Mindset bar
+  mindsetBar:   { background: C.mid, borderBottom: '1px solid #3c3835', padding: '14px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px 24px', flexShrink: 0, overflowY: 'auto', maxHeight: 240 },
+  mindsetBlock: {},
+  mindsetHead:  { fontSize: 9, letterSpacing: '0.16em', color: C.gold, fontWeight: 'bold', marginBottom: 8 },
+  mindsetText:  { fontSize: 12, color: C.onDarkMid, lineHeight: 1.6 },
+  mindsetRow:   { display: 'flex', gap: 8, marginBottom: 4 },
+  mindsetLetter:{ fontSize: 12, color: C.gold, fontWeight: 'bold', minWidth: 12 },
+  mindsetNum:   { fontSize: 11, color: C.gold, minWidth: 14 },
 
-  filterBar:    { background: C.surface, borderBottom: `1px solid ${C.border}`, padding: '10px 24px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', flexShrink: 0 },
-  searchInput:  { padding: '7px 12px', border: `1px solid ${C.border}`, borderRadius: 4, background: C.bg, fontSize: 13, fontFamily: 'Georgia, serif', color: C.text, outline: 'none', width: 180 },
-  filterDivider:{ width: 1, height: 20, background: C.border },
-  filterLabel:  { fontSize: 10, letterSpacing: '0.12em', color: C.textMuted, fontWeight: 'bold' },
-  filterSelect: { padding: '6px 10px', border: `1px solid ${C.border}`, borderRadius: 4, background: C.bg, fontSize: 12, fontFamily: 'Georgia, serif', color: C.text, cursor: 'pointer' },
-  chips:        { display: 'flex', gap: 6, flexWrap: 'wrap' },
-  chip:         { padding: '5px 11px', fontSize: 12, borderRadius: 4, border: `1px solid ${C.border}`, background: C.surface, cursor: 'pointer', color: C.textMid, fontFamily: 'Georgia, serif' },
-  chipActive:   { background: C.dark, color: C.gold, borderColor: C.dark, fontWeight: 'bold' },
-  buyerCount:   { marginLeft: 'auto', fontSize: 12, color: C.textMuted },
+  // Filter bar
+  filterBar: { background: C.surface, borderBottom: `1px solid ${C.border}`, padding: '10px 20px', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', flexShrink: 0 },
+  search:    { padding: '7px 12px', border: `1px solid ${C.border}`, borderRadius: 4, background: C.bg, fontSize: 13, fontFamily: 'Georgia, serif', color: C.text, outline: 'none', width: 180 },
+  pipe:      { width: 1, height: 18, background: C.border, flexShrink: 0 },
+  select:    { padding: '6px 10px', border: `1px solid ${C.border}`, borderRadius: 4, background: C.bg, fontSize: 12, fontFamily: 'Georgia, serif', color: C.text, cursor: 'pointer' },
+  chips:     { display: 'flex', gap: 6, flexWrap: 'wrap' },
+  chip:      { padding: '5px 11px', fontSize: 12, borderRadius: 4, border: `1px solid ${C.border}`, background: C.surface, cursor: 'pointer', color: C.textMid, fontFamily: 'Georgia, serif' },
+  chipOn:    { background: C.dark, color: C.gold, borderColor: C.dark },
+  count:     { marginLeft: 'auto', fontSize: 12, color: C.textMuted },
 
-  grid: { flex: 1, overflowY: 'auto', padding: '20px 24px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: 16, alignContent: 'start' },
+  // Grid
+  grid: { flex: 1, overflowY: 'auto', padding: '20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14, alignContent: 'start' },
 
-  card:          { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, overflow: 'hidden', boxShadow: '0 1px 4px rgba(28,25,23,0.06)' },
-  cardFuzzy:     { borderColor: '#fca5a5' },
-  cardMatch:     { borderColor: C.gold, boxShadow: `0 2px 12px rgba(184,150,46,0.15)` },
-  cardTop:       { background: C.dark, padding: '14px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
-  cardTopLeft:   {},
-  cardName:      { fontSize: 15, color: C.onDark, fontWeight: 'bold', marginBottom: 2 },
-  cardSpouse:    { fontSize: 12, color: C.onDarkSub, marginBottom: 2 },
-  cardAgent:     { fontSize: 11, color: C.onDarkMid },
-  statusBadge:   { fontSize: 10, padding: '3px 8px', borderRadius: 4, whiteSpace: 'nowrap', marginTop: 2 },
-  cardBody:      { padding: '14px 16px' },
-  cardMatchBadge:{ fontSize: 11, color: C.gold, fontWeight: 'bold', letterSpacing: '0.08em', marginBottom: 8 },
-  cardConfidence:{ marginBottom: 6 },
-  cardFuzzyText: { fontSize: 11, color: '#dc2626', fontWeight: 'bold' },
-  cardBuildingText: { fontSize: 11, color: '#d97706', fontWeight: 'bold' },
-  cardSharpText: { fontSize: 11, color: '#16a34a', fontWeight: 'bold' },
-  cardSentence:  { fontSize: 14, color: C.text, lineHeight: 1.6, marginBottom: 8 },
-  cardSentenceEmpty: { fontSize: 13, color: C.textMuted, fontStyle: 'italic', marginBottom: 8 },
-  cardLastUpdate: { fontSize: 12, color: C.textMid, background: C.bg, borderRadius: 4, padding: '6px 10px', lineHeight: 1.5 },
-  cardLastUpdateLabel: { fontWeight: 'bold', color: C.gold },
-  cardFooter:    { padding: '0 16px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
-  cardStat:      { fontSize: 11, color: C.textMuted },
-  cardActions:   { display: 'flex', gap: 8 },
-  cardLogBtn:    { padding: '8px 14px', background: C.dark, color: C.gold, border: 'none', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
-  cardOpenBtn:   { padding: '8px 12px', background: C.bg, color: C.textMid, border: `1px solid ${C.border}`, borderRadius: 6, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  // Cards
+  card:       { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden' },
+  cardMatch:  { borderColor: C.gold },
+  cardUrgent: { borderColor: C.red },
+  cardTop:    { background: C.dark, padding: '12px 14px' },
+  cardName:   { fontSize: 15, color: C.onDark, fontWeight: 'bold', marginBottom: 2 },
+  cardSpouse: { fontSize: 12, color: C.onDarkSub, marginBottom: 2 },
+  cardAgent:  { fontSize: 11, color: C.onDarkMid },
+  cardBody:   { padding: '12px 14px' },
+  cardStatus: { fontSize: 11, fontWeight: 'bold', marginBottom: 6 },
+  cardSentence:{ fontSize: 13, color: C.text, lineHeight: 1.6, marginBottom: 8 },
+  cardEmpty:  { fontSize: 13, color: C.textMuted, fontStyle: 'italic', marginBottom: 8 },
+  cardShift:  { fontSize: 12, color: C.textMid, background: C.bg, borderRadius: 4, padding: '5px 9px', lineHeight: 1.5 },
+  cardShiftLabel: { fontWeight: 'bold', color: C.gold },
+  cardFoot:   { padding: '0 14px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  cardMeta:   { fontSize: 11, color: C.textMuted },
+  cardActions:{ display: 'flex', gap: 8 },
+  cardLog:    { padding: '7px 12px', background: C.dark, color: C.gold, border: 'none', borderRadius: 5, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
+  cardOpen:   { padding: '7px 12px', background: C.bg, color: C.textMid, border: `1px solid ${C.border}`, borderRadius: 5, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
 
-  buyerTopBar:       { background: C.dark, padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 },
-  backBtn:           { fontSize: 12, color: C.gold, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif' },
-  buyerTopRight:     { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  logShowingBtn:     { padding: '7px 14px', border: 'none', borderRadius: 4, background: C.gold, color: C.dark, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
-  markMatchBtn:      { padding: '7px 14px', border: `1px solid ${C.gold}`, borderRadius: 4, background: 'transparent', color: C.gold, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
-  unmatchBtn:        { padding: '7px 14px', border: '1px solid #3c3835', borderRadius: 4, background: 'transparent', color: C.onDarkSub, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
-  statusSelectDark:  { padding: '6px 10px', borderRadius: 4, border: '1px solid #3c3835', background: '#292524', fontSize: 12, fontFamily: 'Georgia, serif', cursor: 'pointer', color: C.onDarkMid },
-  deleteBtnDark:     { padding: '6px 12px', borderRadius: 4, border: '1px solid #5a2020', background: 'transparent', color: '#f87171', fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  // Buyer view
+  buyerBar:      { background: C.dark, padding: '10px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 },
+  back:          { fontSize: 12, color: C.gold, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  buyerBarRight: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  buyerHead:     { background: C.surface, borderBottom: `1px solid ${C.border}`, padding: '14px 20px', flexShrink: 0 },
+  buyerName:     { fontSize: 20, fontWeight: 'bold', color: C.text, marginBottom: 4 },
+  buyerSpouse:   { fontSize: 15, color: C.textMid, fontWeight: 'normal' },
+  buyerMeta:     { fontSize: 12, color: C.textMid, marginBottom: 4 },
+  buyerSentence: { fontSize: 14, color: C.text, lineHeight: 1.6, fontStyle: 'italic', borderLeft: `3px solid ${C.gold}`, paddingLeft: 12, marginTop: 6 },
 
-  buyerHeader:       { background: C.surface, borderBottom: `1px solid ${C.border}`, padding: '14px 24px', flexShrink: 0 },
-  buyerName:         { fontSize: 20, fontWeight: 'bold', color: C.text, marginBottom: 4 },
-  buyerSpouse:       { fontSize: 15, color: C.textMid, fontWeight: 'normal' },
-  buyerMeta:         { fontSize: 12, color: C.textMid, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 },
-  metaDot:           { color: C.border },
-  statusPill:        { fontSize: 10, padding: '2px 7px', borderRadius: 4 },
-  oneSentenceHeader: { fontSize: 14, color: C.text, lineHeight: 1.6, fontStyle: 'italic', borderLeft: `3px solid ${C.gold}`, paddingLeft: 12, marginTop: 4 },
+  // AI notification
+  aiLoad:    { background: C.mid, padding: '8px 20px', flexShrink: 0, fontSize: 12, color: C.gold, fontStyle: 'italic' },
+  aiPanel:   { background: C.goldLight, borderBottom: `1px solid ${C.goldBorder}`, padding: '12px 20px', flexShrink: 0 },
+  aiTop:     { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  aiTitle:   { fontSize: 12, color: '#78501a', fontWeight: 'bold' },
+  aiSentence:{ fontSize: 14, color: '#5a3a0a', fontStyle: 'italic', marginBottom: 8, lineHeight: 1.5 },
+  aiChanges: { display: 'flex', flexDirection: 'column', gap: 5, marginBottom: 6 },
+  aiChange:  { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' },
+  aiKey:     { fontSize: 10, letterSpacing: '0.06em', color: C.gold, fontWeight: 'bold', textTransform: 'uppercase', minWidth: 110, flexShrink: 0 },
+  aiOld:     { fontSize: 12, color: C.textMuted, textDecoration: 'line-through' },
+  aiArrow:   { color: C.gold, fontWeight: 'bold', flexShrink: 0 },
+  aiNew:     { fontSize: 13, color: '#5a3a0a', fontWeight: 'bold' },
+  aiUndo:    { padding: '3px 10px', border: `1px solid ${C.gold}`, borderRadius: 4, background: 'transparent', color: '#78501a', fontSize: 11, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  aiX:       { fontSize: 14, color: '#a8925a', background: 'none', border: 'none', cursor: 'pointer' },
+  aiCoach:   { fontSize: 13, color: '#78501a', borderTop: `1px solid ${C.goldBorder}`, paddingTop: 8, lineHeight: 1.5 },
+  aiCoachLabel: { fontWeight: 'bold' },
 
-  aiLoadBar:    { background: '#292524', padding: '9px 24px', flexShrink: 0 },
-  aiLoadText:   { fontSize: 12, color: C.gold, fontStyle: 'italic' },
+  // Tabs
+  tabs:    { display: 'flex', borderBottom: `1px solid ${C.border}`, flexShrink: 0, background: C.surface, overflowX: 'auto' },
+  tab:     { padding: '11px 18px', background: 'none', border: 'none', borderBottom: '2px solid transparent', fontSize: 13, cursor: 'pointer', color: C.textMuted, fontFamily: 'Georgia, serif', marginBottom: -1, whiteSpace: 'nowrap' },
+  tabOn:   { color: C.text, borderBottomColor: C.gold, fontWeight: 'bold' },
+  tabBody: { flex: 1, overflowY: 'auto', padding: '20px' },
+  pane:    { maxWidth: 840 },
 
-  aiPanel:        { background: C.goldLight, borderBottom: '1px solid #e6d4a0', padding: '12px 24px', flexShrink: 0 },
-  aiPanelTop:     { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  aiPanelTitle:   { fontSize: 12, color: '#78501a', fontWeight: 'bold' },
-  aiSentence:     { fontSize: 14, color: '#5a3a0a', fontStyle: 'italic', marginBottom: 8, lineHeight: 1.5 },
-  aiChanges:      { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 },
-  aiChange:       { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', fontSize: 13 },
-  aiChangeField:  { fontSize: 10, letterSpacing: '0.08em', color: C.gold, fontWeight: 'bold', textTransform: 'uppercase', minWidth: 130, flexShrink: 0 },
-  aiChangePrev:   { color: C.textMuted, textDecoration: 'line-through', fontSize: 12 },
-  aiChangeArrow:  { color: C.gold, fontWeight: 'bold', flexShrink: 0 },
-  aiChangeNext:   { color: '#5a3a0a', fontWeight: 'bold', fontSize: 13 },
-  aiUndoBtn:      { padding: '4px 10px', border: '1px solid #c9a84c', borderRadius: 4, background: 'transparent', color: '#78501a', fontSize: 11, cursor: 'pointer', fontFamily: 'Georgia, serif' },
-  aiDismissBtn:   { fontSize: 14, color: '#a8925a', background: 'none', border: 'none', cursor: 'pointer' },
-  coachingQ:      { fontSize: 13, color: '#78501a', borderTop: '1px solid #e6d4a0', paddingTop: 8, lineHeight: 1.5 },
-  coachingQLabel: { fontWeight: 'bold' },
+  // MOVE tab
+  moveWord:     { fontSize: 30, fontWeight: 'bold', color: C.dark, letterSpacing: '0.16em', marginBottom: 14 },
+  moveGrid:     { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(195px, 1fr))', gap: 10, marginBottom: 14 },
+  moveField:    { border: `1px solid ${C.border}`, borderRadius: 7, padding: '12px', background: C.surface },
+  moveFieldOn:  { borderColor: C.gold, background: C.goldLight },
+  moveFieldHead:{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 8 },
+  moveLetter:   { fontSize: 22, fontWeight: 'bold', color: C.gold, lineHeight: 1, flexShrink: 0 },
+  moveLabel:    { fontSize: 11, fontWeight: 'bold', color: C.text, letterSpacing: '0.04em' },
+  moveQ:        { fontSize: 11, color: C.textMuted, marginTop: 2 },
+  moveInput:    { width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: `1px solid ${C.border}`, borderRadius: 4, background: C.bg, fontSize: 13, fontFamily: 'Georgia, serif', color: C.text, outline: 'none' },
+  fieldLive:    { fontSize: 12, color: C.textMid, fontStyle: 'italic', padding: '6px 8px', background: C.bg, borderRadius: 3, marginBottom: 6, lineHeight: 1.5 },
+  micBtn:       { padding: '4px 8px', background: 'none', border: `1px solid ${C.border}`, borderRadius: 4, cursor: 'pointer', fontSize: 13, color: C.textMuted, flexShrink: 0 },
+  micBtnActive: { background: C.redLight, borderColor: '#fca5a5', color: C.red },
+  twoCol:       { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 14px', marginBottom: 14 },
+  intakeToggle: { fontSize: 13, color: C.textMid, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 5, cursor: 'pointer', padding: '9px 14px', width: '100%', textAlign: 'left', fontFamily: 'Georgia, serif', marginBottom: 12 },
+  intakePanel:  { background: C.dark, borderRadius: 8, padding: '16px 18px', marginBottom: 16 },
+  intakePrepHead:{ fontSize: 12, color: C.onDarkMid, marginBottom: 10 },
+  prepList:     { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 },
+  prepRow:      { display: 'flex', gap: 10, alignItems: 'flex-start' },
+  prepN:        { fontSize: 11, color: C.gold, fontWeight: 'bold', minWidth: 16, marginTop: 1 },
+  prepQ:        { fontSize: 13, color: C.onDark, lineHeight: 1.5 },
+  intakeDivide: { fontSize: 11, color: C.onDarkSub, borderTop: '1px solid #3c3835', paddingTop: 12, marginBottom: 10 },
+  intakePrompt: { fontSize: 16, color: C.onDark, fontWeight: 'bold', marginBottom: 14 },
+  micReady:     { width: '100%', padding: '13px', background: C.gold, color: C.dark, border: 'none', borderRadius: 7, fontSize: 15, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
+  micActive:    { width: '100%', padding: '13px', background: C.red, color: '#fff', border: 'none', borderRadius: 7, fontSize: 15, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold', marginTop: 10 },
+  liveText:     { background: '#292524', borderRadius: 5, padding: '10px 12px', fontSize: 13, color: C.onDark, lineHeight: 1.6, minHeight: 60, marginBottom: 8 },
+  hint:         { fontSize: 11, color: C.onDarkSub, textAlign: 'center', marginTop: 6 },
+  reviewLabel:  { fontSize: 10, letterSpacing: '0.1em', color: C.onDarkSub, marginBottom: 6 },
+  processing:   { fontSize: 13, color: C.gold, fontStyle: 'italic', padding: '8px 0' },
 
-  tabBar:    { display: 'flex', borderBottom: `1px solid ${C.border}`, flexShrink: 0, background: C.surface, overflowX: 'auto' },
-  tab:       { padding: '11px 18px', background: 'none', border: 'none', borderBottom: '2px solid transparent', fontSize: 13, cursor: 'pointer', color: C.textMuted, fontFamily: 'Georgia, serif', marginBottom: -1, whiteSpace: 'nowrap' },
-  tabActive: { color: C.text, borderBottomColor: C.gold, fontWeight: 'bold' },
-  tabContent:{ flex: 1, overflowY: 'auto', padding: '24px' },
-  pane:      { maxWidth: 860 },
+  confSection: { marginTop: 20, paddingTop: 16, borderTop: `1px solid ${C.border}` },
+  confLabel:   { fontSize: 13, color: C.textMid, marginBottom: 12 },
+  confOptions: { display: 'flex', gap: 10, marginBottom: 10 },
+  confOpt:     { flex: 1, border: `1px solid ${C.border}`, borderRadius: 7, padding: '12px 10px', textAlign: 'center', background: C.surface, cursor: 'pointer', fontFamily: 'Georgia, serif', transition: 'all 0.15s' },
+  confOptOn:   { borderColor: C.gold, background: C.goldLight, borderWidth: 2 },
+  confOptLabel:{ fontSize: 12, color: C.text, fontWeight: 'bold', marginBottom: 4 },
+  confOptSub:  { fontSize: 10, color: C.textMuted },
+  confNudge:   { background: C.goldLight, border: `1px solid ${C.goldBorder}`, borderLeft: `3px solid ${C.gold}`, borderRadius: 4, padding: '10px 12px', fontSize: 13, color: '#78501a', lineHeight: 1.6 },
 
-  // Intake panel
-  intakePanel:       { background: C.dark, borderRadius: 10, padding: '18px 20px', marginBottom: 20 },
-  intakePanelHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  intakePanelTitle:  { fontSize: 9, letterSpacing: '0.18em', color: C.gold, fontWeight: 'bold' },
-  intakePanelClose:  { fontSize: 11, color: C.onDarkSub, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif' },
-  intakePrepNote:    { fontSize: 12, color: C.onDarkMid, marginBottom: 10 },
-  prepList:          { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 },
-  prepItem:          { display: 'flex', gap: 10, alignItems: 'flex-start' },
-  prepNum:           { fontSize: 11, color: C.gold, fontWeight: 'bold', minWidth: 16, marginTop: 1 },
-  prepQ:             { fontSize: 13, color: C.onDark, lineHeight: 1.5 },
-  intakeDivider:     { fontSize: 11, color: C.onDarkSub, borderTop: '1px solid #3c3835', paddingTop: 14, marginBottom: 12 },
-  intakePrompt:      { fontSize: 16, color: C.onDark, fontWeight: 'bold', marginBottom: 14, lineHeight: 1.4 },
-  intakeLiveText:    { background: '#292524', borderRadius: 5, padding: '10px 12px', fontSize: 13, color: C.onDark, lineHeight: 1.6, marginTop: 10, minHeight: 60 },
-  intakeHint:        { fontSize: 11, color: C.onDarkSub, marginTop: 8, textAlign: 'center' },
-  intakeReviewLabel: { fontSize: 10, letterSpacing: '0.1em', color: C.onDarkSub, marginBottom: 6 },
-  intakeReviewText:  { background: '#292524', borderRadius: 5, padding: '10px 12px', fontSize: 13, color: C.onDark, lineHeight: 1.6, marginBottom: 12, minHeight: 60 },
-  intakeReviewActions:{ display: 'flex', gap: 10 },
-  intakeProcessing:  { fontSize: 13, color: C.gold, fontStyle: 'italic', padding: '8px 0' },
-  micBtnReady:       { width: '100%', padding: '13px', background: C.gold, color: C.dark, border: 'none', borderRadius: 7, fontSize: 15, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
-  micBtnActive:      { width: '100%', padding: '13px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: 7, fontSize: 15, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
+  // Contacts
+  contactCard:   { border: `1px solid ${C.border}`, borderRadius: 7, padding: '14px', marginBottom: 12, background: C.surface },
+  contactCardOn: { borderColor: C.gold, background: C.goldLight },
+  contactTop:    { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 },
+  roleInput:     { fontSize: 11, fontWeight: 'bold', letterSpacing: '0.06em', color: C.textMid, background: 'transparent', border: 'none', borderBottom: `1px dashed ${C.border}`, outline: 'none', padding: '2px 4px', fontFamily: 'Georgia, serif', textTransform: 'uppercase', width: 150 },
+  primaryTag:    { fontSize: 10, background: C.dark, color: C.gold, padding: '2px 8px', borderRadius: 10 },
+  setPrimary:    { fontSize: 10, background: 'none', border: `1px solid ${C.border}`, borderRadius: 10, color: C.textMuted, padding: '2px 8px', cursor: 'pointer', fontFamily: 'Georgia, serif' },
 
-  moveCoachRow:    { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  moveCoachMsg:    { fontSize: 13, color: C.textMid, fontStyle: 'italic' },
-  voiceIntakeBtn:  { padding: '7px 14px', border: `1px solid ${C.border}`, borderRadius: 5, background: C.surface, color: C.text, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif', whiteSpace: 'nowrap' },
+  // Fields
+  fl:        { fontSize: 11, letterSpacing: '0.06em', color: C.textMuted, textTransform: 'uppercase', marginBottom: 5 },
+  field:     { width: '100%', boxSizing: 'border-box', padding: '9px 12px', border: `1px solid ${C.border}`, borderRadius: 5, background: C.bg, fontSize: 14, fontFamily: 'Georgia, serif', color: C.text, outline: 'none' },
+  fieldOn:   { background: C.goldLight, borderColor: C.gold, color: C.dark },
+  textarea:  { width: '100%', boxSizing: 'border-box', padding: '9px 12px', border: `1px solid ${C.border}`, borderRadius: 5, background: C.bg, fontSize: 14, fontFamily: 'Georgia, serif', color: C.text, outline: 'none', resize: 'vertical', lineHeight: 1.6 },
 
-  oneSentenceCard:  { background: C.goldLight, border: `1px solid #e6d4a0`, borderLeft: `3px solid ${C.gold}`, borderRadius: 6, padding: '12px 16px', marginBottom: 20 },
-  oneSentenceLabel: { fontSize: 9, letterSpacing: '0.14em', color: C.gold, fontWeight: 'bold', marginBottom: 6 },
-  oneSentenceText:  { fontSize: 15, color: C.text, lineHeight: 1.6, fontStyle: 'italic' },
+  // Showings
+  showCard:      { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: '14px', marginBottom: 12 },
+  showTop:       { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 },
+  showAddr:      { fontSize: 15, fontWeight: 'bold', color: C.text },
+  showDate:      { fontSize: 12, color: C.textMuted, marginTop: 2 },
+  showTesting:   { fontSize: 12, color: C.textMid, marginTop: 4, fontStyle: 'italic' },
+  showTestLabel: { fontWeight: 'bold', color: C.gold, fontStyle: 'normal' },
+  showShift:     { background: C.goldLight, border: `1px solid ${C.goldBorder}`, borderLeft: `3px solid ${C.gold}`, borderRadius: 4, padding: '8px 10px', marginBottom: 8, fontSize: 13, color: C.text, lineHeight: 1.5 },
+  showShiftLabel:{ fontWeight: 'bold', color: C.gold },
+  showNote:      { fontSize: 13, color: C.textMid, lineHeight: 1.6 },
 
-  moveWord:    { fontSize: 32, fontWeight: 'bold', color: C.dark, letterSpacing: '0.16em', marginBottom: 14 },
-  moveGrid:    { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 16 },
-  moveField:        { border: `1px solid ${C.border}`, borderRadius: 8, padding: '14px', background: C.surface },
-  moveFieldFilled:  { borderColor: '#d4b060', background: C.goldLight },
-  moveFieldHeader:  { display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 10 },
-  moveFieldLetter:  { fontSize: 24, fontWeight: 'bold', color: C.gold, lineHeight: 1, flexShrink: 0 },
-  moveFieldLabel:   { fontSize: 11, fontWeight: 'bold', color: C.text, letterSpacing: '0.06em' },
-  moveFieldQuestion:{ fontSize: 11, color: C.textMuted, marginTop: 2 },
-  moveFieldMic:     { marginLeft: 'auto', padding: '4px 8px', background: 'none', border: `1px solid ${C.border}`, borderRadius: 4, cursor: 'pointer', fontSize: 13, color: C.textMuted, flexShrink: 0 },
-  moveFieldMicActive:{ background: '#fee2e2', borderColor: '#fca5a5', color: '#dc2626' },
-  moveFieldLive:    { fontSize: 12, color: C.textMid, fontStyle: 'italic', marginBottom: 6, padding: '6px 8px', background: C.bg, borderRadius: 3 },
-  moveFieldInput:   { width: '100%', boxSizing: 'border-box', padding: '8px 10px', border: `1px solid ${C.border}`, borderRadius: 5, background: C.bg, fontSize: 13, fontFamily: 'Georgia, serif', color: C.text, outline: 'none' },
-  moveLocationGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 16px', marginBottom: 20 },
+  // Refinements
+  refIntro:  { fontSize: 13, color: C.textMid, fontStyle: 'italic', marginBottom: 20, padding: '10px 14px', background: C.surface, borderRadius: 6, border: `1px solid ${C.border}`, lineHeight: 1.6 },
+  timeline:  { borderLeft: `2px solid ${C.border}`, paddingLeft: 20, marginLeft: 6 },
+  tlItem:    { position: 'relative', paddingBottom: 20, display: 'flex', gap: 14 },
+  tlDot:     { width: 10, height: 10, borderRadius: '50%', background: C.gold, flexShrink: 0, marginTop: 3, marginLeft: -25 },
+  tlLabel:   { fontSize: 11, color: C.textMuted, marginBottom: 4 },
+  tlText:    { fontSize: 14, color: C.text, lineHeight: 1.6 },
 
-  confidenceSection:     { marginBottom: 4 },
-  confidenceLabel:       { fontSize: 13, color: C.textMid, marginBottom: 10 },
-  confidenceOptions:     { display: 'flex', gap: 10, marginBottom: 10 },
-  confidenceOption:      { flex: 1, border: `1px solid ${C.border}`, borderRadius: 8, padding: '12px 10px', textAlign: 'center', background: C.surface, cursor: 'pointer', fontFamily: 'Georgia, serif' },
-  confidenceOptionActive:{ borderColor: C.gold, background: C.goldLight },
-  confidenceIcon:        { fontSize: 20, marginBottom: 4 },
-  confidenceOptionLabel: { fontSize: 12, color: C.text, fontWeight: 'bold', marginBottom: 3 },
-  confidenceOptionSub:   { fontSize: 10, color: C.textMuted },
-  confidenceNudge:       { background: C.goldLight, border: `1px solid #e6d4a0`, borderLeft: `3px solid ${C.gold}`, borderRadius: 4, padding: '10px 12px', fontSize: 13, color: '#78501a', lineHeight: 1.6 },
+  matchCard:    { background: C.goldLight, border: `1px solid ${C.goldBorder}`, borderRadius: 8, padding: '16px', marginBottom: 20 },
+  matchHead:    { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  matchTitle:   { fontSize: 13, fontWeight: 'bold', color: '#78501a', letterSpacing: '0.08em' },
+  matchMeta:    { fontSize: 12, color: '#a8925a' },
+  matchSentence:{ fontSize: 15, color: '#5a3a0a', fontStyle: 'italic', marginBottom: 14, lineHeight: 1.6 },
+  matchArc:     { borderLeft: `2px solid ${C.goldBorder}`, paddingLeft: 14, display: 'flex', flexDirection: 'column', gap: 10 },
+  arcItem:      {},
+  arcLabel:     { fontSize: 10, color: '#a8925a', marginBottom: 3 },
+  arcOld:       { fontSize: 13, color: '#a8a29e', textDecoration: 'line-through' },
+  arcText:      { fontSize: 13, color: C.textMid, lineHeight: 1.5 },
+  arcFinal:     { fontSize: 15, color: C.dark, fontWeight: 'bold', lineHeight: 1.5 },
 
-  contactCard:        { border: `1px solid ${C.border}`, borderRadius: 8, padding: '16px', marginBottom: 14, background: C.surface },
-  contactCardPrimary: { borderColor: C.gold, background: C.goldLight },
-  contactCardTop:     { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 },
-  roleInput:          { fontSize: 11, fontWeight: 'bold', letterSpacing: '0.08em', color: C.textMid, background: 'transparent', border: 'none', borderBottom: `1px dashed ${C.border}`, outline: 'none', padding: '2px 4px', fontFamily: 'Georgia, serif', textTransform: 'uppercase', width: 160 },
-  primaryBadge:       { fontSize: 10, background: C.dark, color: C.gold, padding: '2px 8px', borderRadius: 10 },
-  setPrimaryBtn:      { fontSize: 10, background: 'none', border: `1px solid ${C.border}`, borderRadius: 10, color: C.textMuted, padding: '2px 8px', cursor: 'pointer', fontFamily: 'Georgia, serif' },
-  twoCol:             { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px' },
+  // Showing form
+  formBar:    { background: C.dark, padding: '10px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 },
+  formTitle:  { fontSize: 14, color: C.onDark, fontWeight: 'bold' },
+  formScroll: { flex: 1, overflowY: 'auto' },
+  formBody:   { padding: '20px', maxWidth: 680, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 0 },
+  formMove:   { background: C.goldLight, border: `1px solid ${C.goldBorder}`, borderLeft: `3px solid ${C.gold}`, borderRadius: 6, padding: '10px 14px', marginBottom: 16 },
+  formMoveLabel: { fontSize: 9, letterSpacing: '0.14em', color: C.gold, fontWeight: 'bold', marginBottom: 4 },
+  formMoveText:  { fontSize: 14, color: C.text, lineHeight: 1.5, fontStyle: 'italic' },
+  debriefBox:    { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: '16px', marginBottom: 14 },
+  debriefBoxHead:{ fontSize: 10, letterSpacing: '0.14em', color: C.textMuted, fontWeight: 'bold', marginBottom: 4 },
+  debriefBoxSub: { fontSize: 12, color: C.textMid, marginBottom: 14, lineHeight: 1.5 },
+  debriefMic:    { width: '100%', padding: '13px', background: C.dark, color: C.gold, border: 'none', borderRadius: 7, fontSize: 14, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold', marginBottom: 10 },
+  debriefMicOn:  { width: '100%', padding: '13px', background: C.red, color: '#fff', border: 'none', borderRadius: 7, fontSize: 14, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold', marginTop: 8 },
+  orRow:         { display: 'flex', alignItems: 'center', gap: 10, margin: '10px 0 10px' },
+  orText:        { fontSize: 11, color: C.textMuted },
+  detailToggle:  { fontSize: 12, color: C.textMuted, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif', padding: '6px 0', marginBottom: 6 },
+  detailFields:  { background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '12px', marginBottom: 14 },
+  detailKey:     { fontSize: 12, fontWeight: 'bold', color: C.text },
+  detailQ:       { fontSize: 11, color: C.textMuted },
+  saveBtn:       { width: '100%', padding: '14px', border: 'none', borderRadius: 7, background: C.dark, color: C.gold, fontSize: 16, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold', marginTop: 8 },
 
-  fieldLabel: { fontSize: 11, letterSpacing: '0.06em', color: C.textMuted, textTransform: 'uppercase', marginBottom: 5 },
-  field:      { width: '100%', boxSizing: 'border-box', padding: '10px 12px', border: `1px solid ${C.border}`, borderRadius: 5, background: C.bg, fontSize: 14, fontFamily: 'Georgia, serif', color: C.text, outline: 'none' },
-  fieldFilled:{ background: C.goldLight, borderColor: '#d4b060', color: C.dark },
-  textarea:   { width: '100%', boxSizing: 'border-box', padding: '10px 12px', border: `1px solid ${C.border}`, borderRadius: 5, background: C.bg, fontSize: 14, fontFamily: 'Georgia, serif', color: C.text, outline: 'none', resize: 'vertical', minHeight: 80, lineHeight: 1.6 },
+  // Buttons
+  btn:       { padding: '9px 18px', border: 'none', borderRadius: 5, background: C.dark, color: C.gold, fontSize: 13, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
+  btnGold:   { padding: '7px 14px', border: 'none', borderRadius: 4, background: C.gold, color: C.dark, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
+  btnOutline:{ padding: '7px 14px', border: `1px solid ${C.gold}`, borderRadius: 4, background: 'transparent', color: C.gold, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  btnGhost:  { padding: '7px 14px', border: `1px solid ${C.border}`, borderRadius: 4, background: C.surface, color: C.textMid, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  btnDanger: { padding: '7px 12px', border: '1px solid #fca5a5', borderRadius: 4, background: 'transparent', color: C.red, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  statusSel: { padding: '6px 10px', borderRadius: 4, border: '1px solid #3c3835', background: '#292524', fontSize: 12, fontFamily: 'Georgia, serif', cursor: 'pointer', color: C.onDarkMid },
 
-  showingCard:    { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, padding: '16px', marginBottom: 14 },
-  showingCardTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 },
-  showingAddr:    { fontSize: 15, fontWeight: 'bold', color: C.text },
-  showingDate:    { fontSize: 12, color: C.textMuted, marginTop: 2 },
-  showingTesting: { fontSize: 12, color: C.textMid, marginTop: 4, fontStyle: 'italic' },
-  showingTestingLabel: { fontWeight: 'bold', color: C.gold, fontStyle: 'normal' },
-  nsUpdateBlock:  { background: C.goldLight, border: `1px solid #e6d4a0`, borderLeft: `3px solid ${C.gold}`, borderRadius: 4, padding: '10px 12px', marginBottom: 10 },
-  nsUpdateLabel:  { fontSize: 9, letterSpacing: '0.12em', color: C.gold, fontWeight: 'bold', marginBottom: 4 },
-  nsUpdateText:   { fontSize: 13, color: C.text, lineHeight: 1.5 },
-  debriefGrid:    { fontSize: 13, color: C.textMid, lineHeight: 1.7, display: 'flex', flexDirection: 'column', gap: 4 },
-  debriefKey:     { fontWeight: 'bold', color: C.text },
+  // Manager / Performance
+  managerBody:   { flex: 1, overflowY: 'auto', padding: '20px' },
+  statRow:       { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 24 },
+  statCard:      { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: '16px', textAlign: 'center' },
+  statVal:       { fontSize: 28, fontWeight: 'bold', color: C.dark, marginBottom: 4 },
+  statLabel:     { fontSize: 11, color: C.textMuted, letterSpacing: '0.06em' },
+  agentSection:  { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 16, overflow: 'hidden' },
+  agentSectionHead:{ padding: '14px 16px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
+  agentSectionName:{ fontSize: 15, fontWeight: 'bold', color: C.text, marginBottom: 3 },
+  agentSectionMeta:{ fontSize: 12, color: C.textMid },
+  agentAvg:      { fontSize: 13, color: C.gold, fontWeight: 'bold' },
+  insightCard:   { background: C.goldLight, border: `1px solid ${C.goldBorder}`, margin: '12px 16px', borderRadius: 6, padding: '12px 14px' },
+  insightRow:    { display: 'flex', gap: 8, marginBottom: 6, fontSize: 13 },
+  insightLabel:  { color: C.gold, fontWeight: 'bold', minWidth: 120, flexShrink: 0 },
+  insightVal:    { color: C.text },
+  insightCoach:  { fontSize: 13, color: '#78501a', borderTop: `1px solid ${C.goldBorder}`, paddingTop: 8, lineHeight: 1.5 },
+  insightCoachLabel: { fontWeight: 'bold' },
+  agentBuyerList:{ padding: '0 0 8px' },
+  agentBuyerRow: { display: 'flex', alignItems: 'center', padding: '10px 16px', borderTop: `1px solid ${C.border}`, cursor: 'pointer' },
+  agentBuyerName:{ flex: 1, fontSize: 14, color: C.text },
+  agentBuyerStatus:{ fontSize: 11, fontWeight: 'bold', minWidth: 140, flexShrink: 0 },
+  agentBuyerShowing:{ fontSize: 11, color: C.textMuted, minWidth: 80, flexShrink: 0 },
+  agentBuyerArrow:{ fontSize: 12, color: C.textMuted },
 
-  refinementsIntro: { fontSize: 14, color: C.textMid, fontStyle: 'italic', marginBottom: 24, padding: '12px 16px', background: C.surface, borderRadius: 6, border: `1px solid ${C.border}`, lineHeight: 1.6 },
-  timeline:         { borderLeft: `2px solid ${C.border}`, paddingLeft: 22, marginLeft: 6 },
-  timelineItem:     { position: 'relative', paddingBottom: 22, display: 'flex', gap: 14 },
-  timelineDot:      { width: 10, height: 10, borderRadius: '50%', background: C.gold, flexShrink: 0, marginTop: 3, marginLeft: -26 },
-  timelineLabel:    { fontSize: 11, color: C.textMuted, marginBottom: 4 },
-  timelineText:     { fontSize: 14, color: C.text, lineHeight: 1.6 },
+  perfIntro:     { fontSize: 13, color: C.textMid, fontStyle: 'italic', marginBottom: 20, padding: '10px 14px', background: C.surface, borderRadius: 6, border: `1px solid ${C.border}`, lineHeight: 1.6 },
+  perfInsightRow:{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 24 },
+  perfInsight:   { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: '20px', textAlign: 'center' },
+  perfInsightVal:{ fontSize: 32, fontWeight: 'bold', color: C.dark, marginBottom: 6 },
+  perfInsightLabel:{ fontSize: 13, color: C.text, fontWeight: 'bold', marginBottom: 4 },
+  perfInsightSub:{ fontSize: 11, color: C.textMuted, lineHeight: 1.5 },
+  perfHistory:   { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, overflow: 'hidden' },
+  perfHistoryHead:{ padding: '12px 16px', borderBottom: `1px solid ${C.border}`, fontSize: 10, letterSpacing: '0.14em', color: C.textMuted, fontWeight: 'bold' },
+  perfRow:       { display: 'flex', alignItems: 'center', padding: '10px 16px', borderBottom: `1px solid ${C.border}` },
+  perfRowName:   { flex: 1, fontSize: 14, color: C.text },
+  perfRowStatus: { fontSize: 11, fontWeight: 'bold', minWidth: 140, flexShrink: 0 },
+  perfRowMeta:   { fontSize: 11, color: C.textMuted },
 
-  matchReveal:       { background: C.goldLight, border: `1px solid #e6d4a0`, borderRadius: 10, padding: '16px 18px', marginBottom: 20 },
-  matchRevealHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  matchRevealTitle:  { fontSize: 13, fontWeight: 'bold', color: '#78501a', letterSpacing: '0.08em' },
-  matchRevealSub:    { fontSize: 12, color: '#a8925a' },
-  matchSentence:     { fontSize: 15, color: '#5a3a0a', fontStyle: 'italic', marginBottom: 14, lineHeight: 1.6 },
-  matchRevealStory:  { borderLeft: '2px solid #e6d4a0', paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 12 },
-  matchStoryItem:    {},
-  matchStoryLabel:   { fontSize: 10, color: '#a8925a', letterSpacing: '0.06em', marginBottom: 3 },
-  matchStoryTextOld: { fontSize: 13, color: '#a8a29e', textDecoration: 'line-through' },
-  matchStoryText:    { fontSize: 13, color: C.textMid, lineHeight: 1.5 },
-  matchStoryTextFinal:{ fontSize: 15, color: C.dark, fontWeight: 'bold', lineHeight: 1.5 },
-
-  formTopBar:       { background: C.dark, padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 },
-  formTopTitle:     { fontSize: 14, color: C.onDark, fontWeight: 'bold' },
-  voiceDebriefBtn:  { padding: '7px 14px', border: `1px solid ${C.gold}`, borderRadius: 5, background: 'transparent', color: C.gold, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
-  formScroll:       { flex: 1, overflowY: 'auto' },
-  formBody:         { padding: '24px', maxWidth: 700, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 0 },
-  formMoveCard:     { background: C.goldLight, border: `1px solid #e6d4a0`, borderLeft: `3px solid ${C.gold}`, borderRadius: 6, padding: '12px 14px', marginBottom: 16 },
-  formMoveLabel:    { fontSize: 9, letterSpacing: '0.14em', color: C.gold, fontWeight: 'bold', marginBottom: 4 },
-  formMoveText:     { fontSize: 14, color: C.text, lineHeight: 1.5, fontStyle: 'italic' },
-  formCoachCard:    { background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6, padding: '12px 14px', marginBottom: 16 },
-  formCoachQ:       { fontSize: 15, color: C.dark, fontWeight: 'bold', marginBottom: 4 },
-  formCoachSub:     { fontSize: 12, color: C.textMid, lineHeight: 1.5 },
-  formLiveText:     { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 5, padding: '12px 14px', fontSize: 13, color: C.text, lineHeight: 1.6, marginBottom: 14, minHeight: 80 },
-  formProcessing:   { fontSize: 13, color: C.gold, fontStyle: 'italic', padding: '8px 0', marginBottom: 8 },
-  debriefSection:   { display: 'flex', flexDirection: 'column', gap: 0 },
-  debriefSectionLabel: { fontSize: 10, letterSpacing: '0.16em', color: C.textMuted, fontWeight: 'bold', paddingBottom: 10, borderBottom: `1px solid ${C.border}`, marginBottom: 14 },
-  debriefFieldRow:  { marginBottom: 6 },
-  debriefFieldMeta: { display: 'flex', alignItems: 'baseline', gap: 8 },
-  debriefFieldKey:  { fontSize: 12, fontWeight: 'bold', color: C.text },
-  debriefFieldQ:    { fontSize: 11, color: C.textMuted },
-  saveShowingBtn:   { width: '100%', padding: '14px', border: 'none', borderRadius: 8, background: C.dark, color: C.gold, fontSize: 16, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold', marginTop: 8 },
-
-  primaryBtn: { padding: '9px 20px', border: 'none', borderRadius: 5, background: C.dark, color: C.gold, fontSize: 13, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
-  ghostBtn:   { padding: '7px 14px', borderRadius: 5, border: `1px solid ${C.border}`, background: C.surface, color: C.textMid, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
-  dangerBtn:  { padding: '7px 14px', borderRadius: 5, border: '1px solid #fca5a5', background: C.surface, color: '#dc2626', fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
-
-  emptyGrid:  { gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', textAlign: 'center' },
-  emptyState: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 20px', textAlign: 'center' },
-  emptyTitle: { fontSize: 18, fontWeight: 'bold', color: C.text, marginBottom: 8 },
-  emptySub:   { fontSize: 14, color: C.textMuted, marginBottom: 20, lineHeight: 1.6 },
+  // Empty states
+  emptyGrid: { gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', textAlign: 'center' },
+  empty:     { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 20px', textAlign: 'center' },
+  emptyTitle:{ fontSize: 18, fontWeight: 'bold', color: C.text, marginBottom: 8 },
+  emptySub:  { fontSize: 14, color: C.textMuted, marginBottom: 20, lineHeight: 1.6 },
 }
