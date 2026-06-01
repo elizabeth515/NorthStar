@@ -567,31 +567,43 @@ function MoveTab({ buyer, patchNS, patch }) {
 
   const [intakeError, setIntakeError] = useState('')
 
+  const [extracted, setExtracted] = useState(null)
+
   const processIntake = async (text) => {
     if (!text.trim()) return
     setPhase('processing')
     setIntakeError('')
+    setExtracted(null)
     try {
       const res = await fetch('/api/suggest', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'intake', transcript: text }),
       })
       const data = await res.json()
-      if (data.extracted) {
-        patchNS(data.extracted)
-        setIntakeOpen(false)
-        setPhase('idle')
-        setRawText('')
+      console.log('Intake response:', data)
+      if (data.extracted && Object.values(data.extracted).some(v => v)) {
+        setExtracted(data.extracted)
+        setPhase('confirm')
       } else if (data.error) {
-        setIntakeError(data.error + (data.detail ? ': ' + data.detail : ''))
+        setIntakeError('API error: ' + data.error + (data.detail ? ' — ' + data.detail : ''))
         setPhase('review')
       } else {
-        setIntakeError('No data returned. Check that ANTHROPIC_API_KEY is set in Vercel.')
+        setIntakeError('No data extracted. Raw response: ' + JSON.stringify(data).slice(0, 200))
         setPhase('review')
       }
     } catch (err) {
-      setIntakeError('Request failed — check your internet connection and Vercel API key.')
+      setIntakeError('Request failed: ' + err.message)
       setPhase('review')
+    }
+  }
+
+  const applyExtracted = () => {
+    if (extracted) {
+      patchNS(extracted)
+      setIntakeOpen(false)
+      setPhase('idle')
+      setRawText('')
+      setExtracted(null)
     }
   }
 
@@ -635,6 +647,22 @@ function MoveTab({ buyer, patchNS, patch }) {
           </div>
         )}
         {phase === 'processing' && <div style={s.processing}>✦ Building the MOVE…</div>}
+          {phase === 'confirm' && extracted && (
+            <div style={s.extractedPreview}>
+              <div style={s.extractedPreviewHead}>MOVE extracted — review before applying</div>
+              {MOVE.map(m => extracted[m.key] ? (
+                <div key={m.key} style={s.extractedRow}>
+                  <span style={s.extractedLetter}>{m.letter}</span>
+                  <span style={s.extractedVal}>{extracted[m.key]}</span>
+                </div>
+              ) : null)}
+              {extracted.oneSentence && <div style={s.extractedSentence}>{extracted.oneSentence}</div>}
+              <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+                <button style={s.btn} onClick={applyExtracted}>Apply to MOVE →</button>
+                <button style={s.btnGhost} onClick={() => { setPhase('idle'); setExtracted(null) }}>Discard</button>
+              </div>
+            </div>
+          )}
         <button style={s.prepToggle} onClick={() => setIntakeOpen(o => !o)}>
           {intakeOpen ? '▲ Hide consultation prep' : '▼ Consultation prep questions'}
         </button>
@@ -706,6 +734,22 @@ function MoveTab({ buyer, patchNS, patch }) {
             </>
           )}
           {phase === 'processing' && <div style={s.processing}>✦ Building the MOVE…</div>}
+          {phase === 'confirm' && extracted && (
+            <div style={s.extractedPreview}>
+              <div style={s.extractedPreviewHead}>MOVE extracted — review before applying</div>
+              {MOVE.map(m => extracted[m.key] ? (
+                <div key={m.key} style={s.extractedRow}>
+                  <span style={s.extractedLetter}>{m.letter}</span>
+                  <span style={s.extractedVal}>{extracted[m.key]}</span>
+                </div>
+              ) : null)}
+              {extracted.oneSentence && <div style={s.extractedSentence}>{extracted.oneSentence}</div>}
+              <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+                <button style={s.btn} onClick={applyExtracted}>Apply to MOVE →</button>
+                <button style={s.btnGhost} onClick={() => { setPhase('idle'); setExtracted(null) }}>Discard</button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1464,6 +1508,12 @@ const s = {
   moveVoiceTopSub:  { fontSize: 12, color: C.onDarkMid, marginBottom: 14, lineHeight: 1.5 },
   intakeReview:     { marginTop: 12 },
   intakeError:      { fontSize: 12, color: C.red, background: C.redLight, border: `1px solid #fca5a5`, borderRadius: 4, padding: '8px 12px', marginBottom: 10, lineHeight: 1.5 },
+  extractedPreview: { background: C.surface, border: `1px solid ${C.goldBorder}`, borderRadius: 6, padding: '14px', marginTop: 10 },
+  extractedPreviewHead: { fontSize: 9, letterSpacing: '0.14em', color: C.gold, fontWeight: 'bold', marginBottom: 10 },
+  extractedRow:     { display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 8 },
+  extractedLetter:  { fontSize: 16, fontWeight: 'bold', color: C.gold, minWidth: 18, flexShrink: 0 },
+  extractedVal:     { fontSize: 13, color: C.text, lineHeight: 1.5 },
+  extractedSentence:{ fontSize: 13, color: C.textMid, fontStyle: 'italic', borderTop: `1px solid ${C.border}`, paddingTop: 10, marginTop: 6, lineHeight: 1.5 },
   prepToggle:       { fontSize: 12, color: C.onDarkSub, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif', padding: '8px 0 0', width: '100%', textAlign: 'left' },
   prepPanel:        { marginTop: 10, paddingTop: 10, borderTop: '1px solid #3c3835' },
   prepPanelHead:    { fontSize: 12, color: C.onDarkMid, marginBottom: 10 },
