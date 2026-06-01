@@ -208,8 +208,6 @@ export default function App({ session }) {
     setSaving(true)
     saveTimers.current[buyer.id] = setTimeout(async () => {
       await supabase.from('buyers').update(buyerToDb(buyer)).eq('id', buyer.id)
-      const { data } = await supabase.from('buyers').select('*').eq('id', buyer.id).single()
-      if (data) setBuyers(p => p.map(b => b.id === data.id ? dbToBuyer(data) : b))
       setSaving(false)
     }, 800)
   }, [])
