@@ -78,9 +78,14 @@ function dbToBuyer(r) {
 
 function buyerToDb(b) {
   return {
-    client_name: b.clientName, agent_name: b.agentName, status: b.status,
-    contacts: b.contacts, north_star: b.northStar, showings: b.showings,
-    confidence: b.confidence || '', is_match: b.isMatch || false,
+    client_name: b.clientName || '',
+    agent_name: b.agentName || '',
+    status: b.status || 'Active',
+    contacts: b.contacts || [],
+    north_star: b.northStar || {},
+    showings: b.showings || [],
+    confidence: b.confidence || '',
+    is_match: b.isMatch || false,
     updated_at: new Date().toISOString(),
   }
 }
@@ -229,8 +234,18 @@ export default function App({ session }) {
 
   const addBuyer = async () => {
     const agentName = currentAgent?.name || ''
-    const { data, error } = await supabase.from('buyers').insert(buyerToDb(newBuyer(agentName))).select().single()
-    if (!error && data) { const b = dbToBuyer(data); setBuyers(p => [b, ...p]); setSelectedId(b.id); setTab('move'); setView('buyer') }
+    try {
+      const { data, error } = await supabase.from('buyers').insert(buyerToDb(newBuyer(agentName))).select().single()
+      if (error) {
+        console.error('Add buyer error:', error)
+        alert('Could not create buyer: ' + error.message + '\n\nMake sure migration2.sql has been run in Supabase.')
+        return
+      }
+      if (data) { const b = dbToBuyer(data); setBuyers(p => [b, ...p]); setSelectedId(b.id); setTab('move'); setView('buyer') }
+    } catch (err) {
+      console.error('Add buyer exception:', err)
+      alert('Unexpected error: ' + err.message)
+    }
   }
 
   const saveShowing = useCallback(async (showing) => {
