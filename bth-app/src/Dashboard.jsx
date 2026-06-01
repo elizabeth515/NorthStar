@@ -35,24 +35,31 @@ const PREP_QUESTIONS = [
 
 // ─── COLORS — communication only ─────────────────────────────────────────────
 const C = {
+  // Structure
   dark:      '#1c1917',
   mid:       '#292524',
-  gold:      '#b8962e',
-  goldLight: '#fdf6e3',
-  goldBorder:'#e6d4a0',
-  red:       '#dc2626',
-  redLight:  '#fef2f2',
-  green:     '#16a34a',
-  greenLight:'#f0fdf4',
-  bg:        '#faf7f2',
+  // Surfaces — warm white only
+  bg:        '#f8f6f3',
   surface:   '#ffffff',
-  border:    '#e8e2d9',
+  border:    '#e8e3dc',
+  borderSoft:'#f0ece6',
+  // Text — charcoal scale
   text:      '#1c1917',
   textMid:   '#57534e',
   textMuted: '#a8a29e',
+  // On dark
   onDark:    '#ffffff',
   onDarkMid: '#a8a29e',
   onDarkSub: '#78716c',
+  // Communication colors — used ONLY when saying something
+  gold:      '#b8962e',   // MOVE-related, active thinking
+  goldLight: '#fdf8ec',   // MOVE field background
+  goldBorder:'#e8d090',   // MOVE field border
+  red:       '#c0392b',   // action required
+  redLight:  '#fdf0ef',   // urgent card background
+  green:     '#2d7a4f',   // match found, confirmed
+  greenLight:'#edf7f1',   // match card background
+  greenBorder:'#a8d4b8',  // match card border
 }
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -249,16 +256,8 @@ export default function App({ session }) {
           const { coachingQuestion, oneSentence, ...nsU } = data.result
           const prev = { ...updated.northStar }
           const changed = Object.keys(nsU).filter(k => nsU[k] && nsU[k] !== prev[k])
-          if (changed.length > 0 || oneSentence) {
-            setBuyers(p => p.map(b => {
-              if (b.id !== selectedId) return b
-              const nb = { ...b, northStar: { ...b.northStar, ...nsU, ...(oneSentence ? { oneSentence } : {}) } }
-              save(nb); return nb
-            }))
-            setAiNotif({ applied: nsU, previous: prev, changed, coachingQuestion, oneSentence })
-          } else if (coachingQuestion) {
-            setAiNotif({ applied: {}, previous: prev, changed: [], coachingQuestion, oneSentence })
-          }
+          // Show proposal — agent must confirm before applying
+          setAiNotif({ proposed: nsU, previous: prev, changed, coachingQuestion, oneSentence, pending: true })
         }
       } catch (_) {}
       setAiLoading(false)
@@ -302,7 +301,7 @@ export default function App({ session }) {
       tab={tab} setTab={setTab} aiNotif={aiNotif} aiLoading={aiLoading} setAiNotif={setAiNotif}
       patch={patch} patchNS={patchNS} saveShowing={saveShowing} deleteShowing={deleteShowing}
       deleteBuyer={deleteBuyer} openShowing={openShowing} onBack={() => setView('snapshot')}
-      undoAI={(prev) => { patchNS(prev); setAiNotif(null) }} />
+/>
 
   if (view === 'manager' && isAdmin)
     return <ManagerView buyers={buyers} agents={agents} onBack={() => setView('snapshot')} onSelect={(id) => { setSelectedId(id); setView('buyer'); setTab('move') }} />
@@ -441,7 +440,7 @@ function BuyerCard({ buyer, onOpen, onLog }) {
 }
 
 // ─── BUYER VIEW ───────────────────────────────────────────────────────────────
-function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotif, aiLoading, setAiNotif, patch, patchNS, saveShowing, deleteShowing, deleteBuyer, openShowing, onBack, undoAI }) {
+function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotif, aiLoading, setAiNotif, patch, patchNS, saveShowing, deleteShowing, deleteBuyer, openShowing, onBack }) {
   return (
     <div style={s.buyerScreen}>
       <div style={s.buyerBar}>
@@ -465,7 +464,9 @@ function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotif, 
       </div>
 
       {aiLoading && <div style={s.aiLoad}>✦ Analyzing showing — updating the MOVE…</div>}
-      {aiNotif && <AiNotif notif={aiNotif} onUndo={undoAI} onDismiss={() => setAiNotif(null)} />}
+      {aiNotif && <AiNotif notif={aiNotif}
+        onApply={(updates) => { patchNS(updates); setAiNotif(null) }}
+        onDismiss={() => setAiNotif(null)} />}
 
       <div style={s.tabs}>
         {[['move','The MOVE'],['contacts','Contacts'],['showings',`Showings (${buyer.showings.length})`],['refinements','Refinements']].map(([k,l]) => (
@@ -483,33 +484,67 @@ function BuyerView({ buyer, agents, currentAgent, saving, tab, setTab, aiNotif, 
   )
 }
 
-// ─── AI NOTIFICATION ──────────────────────────────────────────────────────────
-function AiNotif({ notif, onUndo, onDismiss }) {
-  const { applied, previous, changed, coachingQuestion, oneSentence } = notif
+// ─── AI CONFIRMATION PANEL ────────────────────────────────────────────────────
+function AiNotif({ notif, onApply, onDismiss }) {
+  const { proposed, previous, changed, coachingQuestion, oneSentence, pending } = notif
+  const [accepted, setAccepted] = useState(changed?.reduce((a, k) => ({ ...a, [k]: true }), {}) || {})
+
+  const handleApply = () => {
+    const toApply = {}
+    changed?.forEach(k => { if (accepted[k]) toApply[k] = proposed[k] })
+    if (oneSentence) toApply.oneSentence = oneSentence
+    onApply(toApply)
+  }
+
+  if (!pending) return null
+
   return (
     <div style={s.aiPanel}>
       <div style={s.aiTop}>
-        <span style={s.aiTitle}>✦ MOVE updated from showing</span>
-        <div style={{ display: 'flex', gap: 10 }}>
-          {changed?.length > 0 && <button style={s.aiUndo} onClick={onUndo}>Undo</button>}
-          <button style={s.aiX} onClick={onDismiss}>✕</button>
-        </div>
+        <span style={s.aiTitle}>✦ MOVE update suggested from showing</span>
+        <button style={s.aiX} onClick={onDismiss}>✕</button>
       </div>
       {oneSentence && <div style={s.aiSentence}>{oneSentence}</div>}
-      {changed?.length > 0 && (
-        <div style={s.aiChanges}>
-          {changed.map(k => (
-            <div key={k} style={s.aiChange}>
-              <span style={s.aiKey}>{MOVE.find(m => m.key === k)?.label || k}</span>
-              <span style={s.aiOld}>{previous[k] || '—'}</span>
-              <span style={s.aiArrow}>→</span>
-              <span style={s.aiNew}>{applied[k]}</span>
-            </div>
-          ))}
-        </div>
+      {changed?.length > 0 ? (
+        <>
+          <div style={s.aiSubtitle}>Review each change. Uncheck any you want to keep as-is.</div>
+          <div style={s.aiChanges}>
+            {changed.map(k => (
+              <div key={k} style={s.aiChange}>
+                <input type="checkbox" checked={!!accepted[k]}
+                  onChange={e => setAccepted(a => ({ ...a, [k]: e.target.checked }))}
+                  style={{ marginTop: 2, flexShrink: 0, accentColor: C.gold }} />
+                <span style={s.aiKey}>{MOVE.find(m => m.key === k)?.label || k}</span>
+                <span style={s.aiOld}>{previous[k] || <em style={{ color: C.textMuted }}>was empty</em>}</span>
+                <span style={s.aiArrow}>→</span>
+                <span style={s.aiNew}>{proposed[k]}</span>
+              </div>
+            ))}
+          </div>
+          <div style={s.aiActions}>
+            <button style={s.aiApply} onClick={handleApply}>Apply selected changes</button>
+            <button style={s.aiSkip} onClick={onDismiss}>Keep current MOVE</button>
+          </div>
+        </>
+      ) : (
+        <div style={{ ...s.aiCoach, borderTop: 'none', paddingTop: 0 }}>No MOVE changes suggested.</div>
       )}
-      {coachingQuestion && <div style={s.aiCoach}><span style={s.aiCoachLabel}>Next: </span>{coachingQuestion}</div>}
+      {coachingQuestion && (
+        <div style={s.aiCoach}><span style={s.aiCoachLabel}>Next question to answer: </span>{coachingQuestion}</div>
+      )}
     </div>
+  )
+}
+
+// ─── VOICE BUTTON — consistent across app ────────────────────────────────────
+function VoiceButton({ listening, onStart, onStop, label = 'Speak', size = 'normal' }) {
+  const style = size === 'large'
+    ? { ...s.voiceBtnLarge, ...(listening ? s.voiceBtnLargeActive : {}) }
+    : { ...s.voiceBtn, ...(listening ? s.voiceBtnActive : {}) }
+  return (
+    <button style={style} onClick={listening ? onStop : onStart}>
+      {listening ? '⏹' : '🎙'} {listening ? 'Done speaking' : label}
+    </button>
   )
 }
 
@@ -530,17 +565,34 @@ function MoveTab({ buyer, patchNS, patch }) {
 
   const stopVoice = () => finish((text) => { setRawText(text); setPhase('review') })
 
+  const [intakeError, setIntakeError] = useState('')
+
   const processIntake = async (text) => {
     if (!text.trim()) return
     setPhase('processing')
+    setIntakeError('')
     try {
       const res = await fetch('/api/suggest', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type: 'intake', transcript: text }),
       })
       const data = await res.json()
-      if (data.extracted) { patchNS(data.extracted); setIntakeOpen(false); setPhase('idle'); setRawText('') }
-    } catch (_) { setPhase('review') }
+      if (data.extracted) {
+        patchNS(data.extracted)
+        setIntakeOpen(false)
+        setPhase('idle')
+        setRawText('')
+      } else if (data.error) {
+        setIntakeError(data.error + (data.detail ? ': ' + data.detail : ''))
+        setPhase('review')
+      } else {
+        setIntakeError('No data returned. Check that ANTHROPIC_API_KEY is set in Vercel.')
+        setPhase('review')
+      }
+    } catch (err) {
+      setIntakeError('Request failed — check your internet connection and Vercel API key.')
+      setPhase('review')
+    }
   }
 
   const CONFIDENCE = [
@@ -558,7 +610,47 @@ function MoveTab({ buyer, patchNS, patch }) {
   return (
     <div style={s.pane}>
 
-      {/* MOVE fields — top */}
+      {/* Voice intake — at top */}
+      <div style={s.moveVoiceTop}>
+        <div style={s.moveVoiceTopLabel}>Tell me about this buyer</div>
+        <div style={s.moveVoiceTopSub}>Talk freely after the consultation. AI builds the MOVE from what you say.</div>
+        <VoiceButton
+          listening={phase === 'listening'}
+          onStart={runVoice}
+          onStop={stopVoice}
+          label="Tap and talk freely"
+          size="large"
+        />
+        {phase === 'listening' && (
+          <div style={s.liveText}>{transcript || <span style={{ color: C.textMuted, fontStyle: 'italic' }}>Listening…</span>}</div>
+        )}
+        {phase === 'review' && (
+          <div style={s.intakeReview}>
+            <div style={s.reviewLabel}>What you said:</div>
+            <textarea style={{ ...s.textarea, minHeight: 70, marginBottom: 10 }} value={rawText} onChange={e => setRawText(e.target.value)} />
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button style={s.btn} onClick={() => processIntake(rawText)}>Build the MOVE →</button>
+              <button style={s.btnGhost} onClick={() => { setPhase('idle'); setRawText('') }}>Re-record</button>
+            </div>
+          </div>
+        )}
+        {phase === 'processing' && <div style={s.processing}>✦ Building the MOVE…</div>}
+        <button style={s.prepToggle} onClick={() => setIntakeOpen(o => !o)}>
+          {intakeOpen ? '▲ Hide consultation prep' : '▼ Consultation prep questions'}
+        </button>
+        {intakeOpen && (
+          <div style={s.prepPanel}>
+            <div style={s.prepPanelHead}>Before the consultation, listen for:</div>
+            <div style={s.prepList}>
+              {PREP_QUESTIONS.map((q, i) => (
+                <div key={i} style={s.prepRow}><span style={s.prepN}>{i+1}</span><span style={s.prepQ}>{q}</span></div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* MOVE fields */}
       <div style={s.moveWord}>MOVE</div>
       <div style={s.moveGrid}>
         {MOVE.map(m => (
@@ -579,11 +671,6 @@ function MoveTab({ buyer, patchNS, patch }) {
             placeholder="e.g. Green Hills" onChange={e => patchNS({ location: e.target.value })} />
         </div>
       </div>
-
-      {/* Voice intake toggle */}
-      <button style={s.intakeToggle} onClick={() => setIntakeOpen(o => !o)}>
-        {intakeOpen ? '▲ Close intake' : '🎙 Voice intake — tell me about this buyer'}
-      </button>
 
       {/* Intake panel */}
       {intakeOpen && (
@@ -630,7 +717,7 @@ function MoveTab({ buyer, patchNS, patch }) {
             <button key={opt.val}
               style={{ ...s.confOpt, ...(buyer.confidence === opt.val ? s.confOptOn : {}) }}
               onClick={() => patch({ confidence: opt.val })}>
-              <div style={s.confOptLabel}>{opt.label}</div>
+              <div style={{ ...s.confOptLabel, ...(buyer.confidence === opt.val ? { color: C.gold } : {}) }}>{opt.label}</div>
               <div style={s.confOptSub}>{opt.sub}</div>
             </button>
           ))}
@@ -648,10 +735,8 @@ function MoveField({ m, value, onChange }) {
   const { start, finish, listening, transcript } = useVoice()
   const [active, setActive] = useState(false)
 
-  const toggle = () => {
-    if (active) { finish((t) => { setActive(false); if (t) onChange(t) }) }
-    else { setActive(true); start((t) => { setActive(false); if (t) onChange(t) }) }
-  }
+  const handleStart = () => { setActive(true); start((t) => { setActive(false); if (t) onChange(t) }) }
+  const handleStop = () => { finish((t) => { setActive(false); if (t) onChange(t) }) }
 
   return (
     <div style={{ ...s.moveField, ...(value ? s.moveFieldOn : {}) }}>
@@ -661,9 +746,7 @@ function MoveField({ m, value, onChange }) {
           <div style={s.moveLabel}>{m.label}</div>
           <div style={s.moveQ}>{m.question}</div>
         </div>
-        <button style={{ ...s.micBtn, ...(active ? s.micBtnActive : {}) }} onClick={toggle}>
-          {active ? '⏹' : '🎙'}
-        </button>
+        <VoiceButton listening={active} onStart={handleStart} onStop={handleStop} label="" size="small" />
       </div>
       {active && <div style={s.fieldLive}>{transcript || <span style={{ color: C.textMuted, fontStyle: 'italic' }}>Listening…</span>}</div>}
       <input style={s.moveInput} value={value} placeholder="Type or speak →" onChange={e => onChange(e.target.value)} />
@@ -848,15 +931,15 @@ function ShowingForm({ draft, setDraft, buyer, onSave, onCancel, isEdit }) {
             <div style={s.debriefBoxHead}>WHAT DID YOU LEARN?</div>
             <div style={s.debriefBoxSub}>Talk freely or type. AI updates the MOVE automatically.</div>
 
-            {phase === 'idle' && (
-              <button style={s.debriefMic} onClick={runVoice}>🎙 Tap and talk freely</button>
-            )}
+            <VoiceButton
+              listening={phase === 'listening'}
+              onStart={runVoice}
+              onStop={stopVoice}
+              label="Tap and talk freely"
+              size="large"
+            />
             {phase === 'listening' && (
-              <>
-                <div style={s.liveText}>{transcript || <span style={{ color: C.textMuted, fontStyle: 'italic' }}>Listening… speak naturally.</span>}</div>
-                <button style={s.debriefMicOn} onClick={stopVoice}>⏹ Done speaking</button>
-                <div style={s.hint}>Pause 5 seconds to finish automatically.</div>
-              </>
+              <div style={s.liveText}>{transcript || <span style={{ color: C.textMuted, fontStyle: 'italic' }}>Listening… speak naturally.</span>}</div>
             )}
 
             <div style={s.orRow}><span style={s.orText}>or type</span></div>
@@ -1012,18 +1095,35 @@ function ManagerView({ buyers, agents, onBack, onSelect }) {
 }
 
 // ─── PERFORMANCE VIEW ─────────────────────────────────────────────────────────
+const MOVE_PROMPTS = {
+  motivation: ["What finally made them decide to move now?", "What's not working about where they are today?", "What would happen if they didn't move this year?"],
+  outcome:    ["What does their life look like once they're in the right home?", "What changes for them the day after they close?", "What are they really buying — beyond the house?"],
+  veto:       ["What would make them walk away from a deal they otherwise love?", "What's the one thing they absolutely won't compromise on?", "Have they walked away from a house before? Why?"],
+  exchange:   ["What would they give up to get what matters most?", "If they had to choose between X and Y — which wins?", "What trade would feel worth it six months after closing?"],
+}
+
 function PerformanceView({ buyers, agentName, onBack }) {
   const mine = buyers.filter(b => b.agentName === agentName)
   const matched = mine.filter(b => b.isMatch)
   const avgShowings = matched.length > 0 ? (matched.reduce((s, b) => s + b.showings.length, 0) / matched.length).toFixed(1) : '—'
-  const completeAtOne = mine.filter(b => {
-    const firstShowing = [...b.showings].sort((a, c) => new Date(a.date) - new Date(c.date))[0]
-    if (!firstShowing) return false
-    return moveCount(b.northStar) === 4
-  }).length
-  const completeRate = mine.length > 0 ? Math.round((completeAtOne / mine.length) * 100) : 0
   const totalShifts = mine.reduce((s, b) => s + b.showings.filter(sh => sh.hypothesisUpdate).length, 0)
   const avgShifts = matched.length > 0 ? (matched.reduce((s, b) => s + b.showings.filter(sh => sh.hypothesisUpdate).length, 0) / matched.length).toFixed(1) : '—'
+  const [coaching, setCoaching] = useState(null)
+  const [loadingCoaching, setLoadingCoaching] = useState(false)
+
+  const getCoaching = async () => {
+    if (mine.length === 0) return
+    setLoadingCoaching(true)
+    try {
+      const res = await fetch('/api/suggest', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'coaching_insights', agentName, buyers: mine }),
+      })
+      const data = await res.json()
+      if (data.insights) setCoaching(data.insights)
+    } catch (_) {}
+    setLoadingCoaching(false)
+  }
 
   return (
     <div style={s.screen}>
@@ -1032,7 +1132,12 @@ function PerformanceView({ buyers, agentName, onBack }) {
           <div style={s.brand}>BUILD THE HOUSE</div>
           <div style={s.brandSub}>Your Diagnostic Performance</div>
         </div>
-        <button style={s.topBtn} onClick={onBack}>← Back</button>
+        <div style={s.topRight}>
+          <button style={s.topBtnGold} onClick={getCoaching} disabled={loadingCoaching || mine.length === 0}>
+            {loadingCoaching ? 'Analyzing…' : '✦ Get My Coaching'}
+          </button>
+          <button style={s.topBtn} onClick={onBack}>← Back</button>
+        </div>
       </div>
 
       <div style={s.managerBody}>
@@ -1043,7 +1148,7 @@ function PerformanceView({ buyers, agentName, onBack }) {
             { label: 'Total Buyers', val: mine.length },
             { label: 'Matches Found', val: matched.length },
             { label: 'Avg Showings to Match', val: avgShowings },
-            { label: 'MOVE Shifts Total', val: totalShifts },
+            { label: 'Total MOVE Shifts', val: totalShifts },
           ].map(stat => (
             <div key={stat.label} style={s.statCard}>
               <div style={s.statVal}>{stat.val}</div>
@@ -1052,18 +1157,32 @@ function PerformanceView({ buyers, agentName, onBack }) {
           ))}
         </div>
 
-        <div style={s.perfInsightRow}>
-          <div style={s.perfInsight}>
-            <div style={s.perfInsightVal}>{completeRate}%</div>
-            <div style={s.perfInsightLabel}>MOVE complete by showing 1</div>
-            <div style={s.perfInsightSub}>Higher means sharper intake diagnosis</div>
+        {/* AI Coaching */}
+        {coaching && (
+          <div style={s.coachingCard}>
+            <div style={s.coachingCardHead}>YOUR COACHING</div>
+            <div style={s.coachingRow}>
+              <span style={s.coachingKey}>Weakest letter:</span>
+              <span style={s.coachingVal}>{coaching.weakestLetter} — {MOVE.find(m => m.letter === coaching.weakestLetter)?.label}</span>
+            </div>
+            <div style={s.coachingRow}>
+              <span style={s.coachingKey}>Pattern:</span>
+              <span style={s.coachingVal}>{coaching.pattern}</span>
+            </div>
+            <div style={s.coachingPromptBlock}>
+              <div style={s.coachingPromptLabel}>Coaching focus:</div>
+              <div style={s.coachingPromptText}>{coaching.coachingPrompt}</div>
+            </div>
+            {coaching.weakestLetter && MOVE_PROMPTS[MOVE.find(m => m.letter === coaching.weakestLetter)?.key] && (
+              <div style={s.coachingQList}>
+                <div style={s.coachingQListLabel}>Questions to ask your buyer right now:</div>
+                {MOVE_PROMPTS[MOVE.find(m => m.letter === coaching.weakestLetter)?.key].map((q, i) => (
+                  <div key={i} style={s.coachingQItem}><span style={s.coachingQNum}>{i+1}</span><span>{q}</span></div>
+                ))}
+              </div>
+            )}
           </div>
-          <div style={s.perfInsight}>
-            <div style={s.perfInsightVal}>{avgShifts}</div>
-            <div style={s.perfInsightLabel}>Avg MOVE shifts before match</div>
-            <div style={s.perfInsightSub}>Shifts mean learning — that's good</div>
-          </div>
-        </div>
+        )}
 
         <div style={s.perfHistory}>
           <div style={s.perfHistoryHead}>RECENT BUYERS</div>
@@ -1208,15 +1327,15 @@ const s = {
   micReady:     { width: '100%', padding: '13px', background: C.gold, color: C.dark, border: 'none', borderRadius: 7, fontSize: 15, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
   micActive:    { width: '100%', padding: '13px', background: C.red, color: '#fff', border: 'none', borderRadius: 7, fontSize: 15, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold', marginTop: 10 },
   liveText:     { background: '#292524', borderRadius: 5, padding: '10px 12px', fontSize: 13, color: C.onDark, lineHeight: 1.6, minHeight: 60, marginBottom: 8 },
-  hint:         { fontSize: 11, color: C.onDarkSub, textAlign: 'center', marginTop: 6 },
+  hint:         { fontSize: 11, color: C.onDarkSub, textAlign: 'center', marginTop: 8 },
   reviewLabel:  { fontSize: 10, letterSpacing: '0.1em', color: C.onDarkSub, marginBottom: 6 },
   processing:   { fontSize: 13, color: C.gold, fontStyle: 'italic', padding: '8px 0' },
 
-  confSection: { marginTop: 20, paddingTop: 16, borderTop: `1px solid ${C.border}` },
+  confSection: { marginTop: 24, paddingTop: 20, borderTop: `1px solid ${C.border}` },
   confLabel:   { fontSize: 13, color: C.textMid, marginBottom: 12 },
   confOptions: { display: 'flex', gap: 10, marginBottom: 10 },
-  confOpt:     { flex: 1, border: `1px solid ${C.border}`, borderRadius: 7, padding: '12px 10px', textAlign: 'center', background: C.surface, cursor: 'pointer', fontFamily: 'Georgia, serif', transition: 'all 0.15s' },
-  confOptOn:   { borderColor: C.gold, background: C.goldLight, borderWidth: 2 },
+  confOpt:     { flex: 1, border: '2px solid transparent', borderRadius: 7, padding: '12px 10px', textAlign: 'center', background: C.surface, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+  confOptOn:   { border: `2px solid ${C.gold}`, background: C.goldLight, boxShadow: `0 0 0 1px ${C.gold}` },
   confOptLabel:{ fontSize: 12, color: C.text, fontWeight: 'bold', marginBottom: 4 },
   confOptSub:  { fontSize: 10, color: C.textMuted },
   confNudge:   { background: C.goldLight, border: `1px solid ${C.goldBorder}`, borderLeft: `3px solid ${C.gold}`, borderRadius: 4, padding: '10px 12px', fontSize: 13, color: '#78501a', lineHeight: 1.6 },
@@ -1250,21 +1369,21 @@ const s = {
   refIntro:  { fontSize: 13, color: C.textMid, fontStyle: 'italic', marginBottom: 20, padding: '10px 14px', background: C.surface, borderRadius: 6, border: `1px solid ${C.border}`, lineHeight: 1.6 },
   timeline:  { borderLeft: `2px solid ${C.border}`, paddingLeft: 20, marginLeft: 6 },
   tlItem:    { position: 'relative', paddingBottom: 20, display: 'flex', gap: 14 },
-  tlDot:     { width: 10, height: 10, borderRadius: '50%', background: C.gold, flexShrink: 0, marginTop: 3, marginLeft: -25 },
+  tlDot:     { width: 10, height: 10, borderRadius: '50%', background: C.border, flexShrink: 0, marginTop: 3, marginLeft: -25 },
   tlLabel:   { fontSize: 11, color: C.textMuted, marginBottom: 4 },
   tlText:    { fontSize: 14, color: C.text, lineHeight: 1.6 },
 
-  matchCard:    { background: C.goldLight, border: `1px solid ${C.goldBorder}`, borderRadius: 8, padding: '16px', marginBottom: 20 },
+  matchCard:    { background: C.greenLight, border: `1px solid ${C.greenBorder}`, borderRadius: 8, padding: '16px', marginBottom: 20 },
   matchHead:    { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  matchTitle:   { fontSize: 13, fontWeight: 'bold', color: '#78501a', letterSpacing: '0.08em' },
-  matchMeta:    { fontSize: 12, color: '#a8925a' },
-  matchSentence:{ fontSize: 15, color: '#5a3a0a', fontStyle: 'italic', marginBottom: 14, lineHeight: 1.6 },
-  matchArc:     { borderLeft: `2px solid ${C.goldBorder}`, paddingLeft: 14, display: 'flex', flexDirection: 'column', gap: 10 },
+  matchTitle:   { fontSize: 13, fontWeight: 'bold', color: C.green, letterSpacing: '0.08em' },
+  matchMeta:    { fontSize: 12, color: C.textMuted },
+  matchSentence:{ fontSize: 15, color: C.text, fontStyle: 'italic', marginBottom: 14, lineHeight: 1.6 },
+  matchArc:     { borderLeft: `2px solid ${C.greenBorder}`, paddingLeft: 14, display: 'flex', flexDirection: 'column', gap: 10 },
   arcItem:      {},
-  arcLabel:     { fontSize: 10, color: '#a8925a', marginBottom: 3 },
+  arcLabel:     { fontSize: 10, color: C.textMuted, marginBottom: 3 },
   arcOld:       { fontSize: 13, color: '#a8a29e', textDecoration: 'line-through' },
   arcText:      { fontSize: 13, color: C.textMid, lineHeight: 1.5 },
-  arcFinal:     { fontSize: 15, color: C.dark, fontWeight: 'bold', lineHeight: 1.5 },
+  arcFinal:     { fontSize: 15, color: C.green, fontWeight: 'bold', lineHeight: 1.5 },
 
   // Showing form
   formBar:    { background: C.dark, padding: '10px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 },
@@ -1305,7 +1424,7 @@ const s = {
   agentSectionHead:{ padding: '14px 16px', borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' },
   agentSectionName:{ fontSize: 15, fontWeight: 'bold', color: C.text, marginBottom: 3 },
   agentSectionMeta:{ fontSize: 12, color: C.textMid },
-  agentAvg:      { fontSize: 13, color: C.gold, fontWeight: 'bold' },
+  agentAvg:      { fontSize: 13, color: C.textMid, fontWeight: 'bold' },
   insightCard:   { background: C.goldLight, border: `1px solid ${C.goldBorder}`, margin: '12px 16px', borderRadius: 6, padding: '12px 14px' },
   insightRow:    { display: 'flex', gap: 8, marginBottom: 6, fontSize: 13 },
   insightLabel:  { color: C.gold, fontWeight: 'bold', minWidth: 120, flexShrink: 0 },
@@ -1332,7 +1451,45 @@ const s = {
   perfRowStatus: { fontSize: 11, fontWeight: 'bold', minWidth: 140, flexShrink: 0 },
   perfRowMeta:   { fontSize: 11, color: C.textMuted },
 
+  // VoiceButton
+  voiceBtn:         { padding: '5px 10px', border: `1px solid ${C.border}`, borderRadius: 4, background: C.surface, color: C.textMid, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif', display: 'flex', alignItems: 'center', gap: 5 },
+  voiceBtnActive:   { background: C.redLight, borderColor: '#fca5a5', color: C.red },
+  voiceBtnLarge:    { width: '100%', padding: '13px', background: C.dark, color: C.gold, border: 'none', borderRadius: 7, fontSize: 15, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  voiceBtnLargeActive: { width: '100%', padding: '13px', background: C.red, color: '#fff', border: 'none', borderRadius: 7, fontSize: 15, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  voiceBtnSmall:    { padding: '3px 7px', border: `1px solid ${C.border}`, borderRadius: 4, background: 'none', color: C.textMuted, fontSize: 12, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+
+  // MOVE tab voice top
+  moveVoiceTop:     { background: C.dark, borderRadius: 8, padding: '16px', marginBottom: 20 },
+  moveVoiceTopLabel:{ fontSize: 14, color: C.onDark, fontWeight: 'bold', marginBottom: 4 },
+  moveVoiceTopSub:  { fontSize: 12, color: C.onDarkMid, marginBottom: 14, lineHeight: 1.5 },
+  intakeReview:     { marginTop: 12 },
+  intakeError:      { fontSize: 12, color: C.red, background: C.redLight, border: `1px solid #fca5a5`, borderRadius: 4, padding: '8px 12px', marginBottom: 10, lineHeight: 1.5 },
+  prepToggle:       { fontSize: 12, color: C.onDarkSub, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'Georgia, serif', padding: '8px 0 0', width: '100%', textAlign: 'left' },
+  prepPanel:        { marginTop: 10, paddingTop: 10, borderTop: '1px solid #3c3835' },
+  prepPanelHead:    { fontSize: 12, color: C.onDarkMid, marginBottom: 10 },
+
+  // AI confirmation panel
+  aiSubtitle:  { fontSize: 12, color: '#78501a', marginBottom: 10, lineHeight: 1.5 },
+  aiActions:   { display: 'flex', gap: 10, marginTop: 12 },
+  aiApply:     { padding: '8px 16px', border: 'none', borderRadius: 5, background: C.dark, color: C.gold, fontSize: 13, cursor: 'pointer', fontFamily: 'Georgia, serif', fontWeight: 'bold' },
+  aiSkip:      { padding: '8px 14px', border: `1px solid ${C.goldBorder}`, borderRadius: 5, background: 'transparent', color: '#78501a', fontSize: 13, cursor: 'pointer', fontFamily: 'Georgia, serif' },
+
+  // Coaching card
+  coachingCard:      { background: C.goldLight, border: `1px solid ${C.goldBorder}`, borderRadius: 8, padding: '16px 18px', marginBottom: 20 },
+  coachingCardHead:  { fontSize: 9, letterSpacing: '0.16em', color: C.gold, fontWeight: 'bold', marginBottom: 12 },
+  coachingRow:       { display: 'flex', gap: 10, marginBottom: 8, fontSize: 13, alignItems: 'flex-start' },
+  coachingKey:       { color: C.gold, fontWeight: 'bold', minWidth: 120, flexShrink: 0, fontSize: 11, letterSpacing: '0.04em' },
+  coachingVal:       { color: C.text, lineHeight: 1.5 },
+  coachingPromptBlock: { background: C.surface, border: `1px solid ${C.goldBorder}`, borderRadius: 5, padding: '10px 12px', marginBottom: 14 },
+  coachingPromptLabel: { fontSize: 10, letterSpacing: '0.1em', color: C.gold, fontWeight: 'bold', marginBottom: 4 },
+  coachingPromptText: { fontSize: 14, color: C.text, lineHeight: 1.6 },
+  coachingQList:     { borderTop: `1px solid ${C.goldBorder}`, paddingTop: 12 },
+  coachingQListLabel:{ fontSize: 11, color: C.gold, fontWeight: 'bold', letterSpacing: '0.06em', marginBottom: 10 },
+  coachingQItem:     { display: 'flex', gap: 10, marginBottom: 8, fontSize: 13, color: C.text, lineHeight: 1.5 },
+  coachingQNum:      { color: C.gold, fontWeight: 'bold', minWidth: 16, flexShrink: 0 },
+
   // Empty states
+  
   emptyGrid: { gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', textAlign: 'center' },
   empty:     { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px 20px', textAlign: 'center' },
   emptyTitle:{ fontSize: 18, fontWeight: 'bold', color: C.text, marginBottom: 8 },
