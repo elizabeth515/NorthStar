@@ -785,14 +785,6 @@ function MoveTab({ buyer, patchNS, patch }) {
         )}
       </div>
 
-      {/* MOVE fields */}
-      <div style={s.moveSectionHead}>MOVE</div>
-      <div style={s.moveGrid}>
-        {MOVE.map(m => (
-          <MoveField key={m.key} m={m} value={ns[m.key] || ''} onChange={v => patchNS({ [m.key]: v })} />
-        ))}
-      </div>
-
       {/* Location + type */}
       <div style={s.twoCol}>
         <div>
@@ -807,6 +799,14 @@ function MoveTab({ buyer, patchNS, patch }) {
             value={ns.location || ''} placeholder="e.g. Green Hills"
             onChange={e => patchNS({ location: e.target.value })} />
         </div>
+      </div>
+
+      {/* MOVE fields */}
+      <div style={s.moveSectionHead}>MOVE</div>
+      <div style={s.moveGrid}>
+        {MOVE.map(m => (
+          <MoveField key={m.key} m={m} value={ns[m.key] || ''} onChange={v => patchNS({ [m.key]: v })} />
+        ))}
       </div>
 
       {/* Confidence continuum */}
